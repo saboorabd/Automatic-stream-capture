@@ -1,4 +1,162 @@
-// old:
-streamJsonPath: 'stream.json',
-// new:
-streamJsonPath: '/api/stream',
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream Capture Player</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #0b0b0f;
+      color: #e8e8ee;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 1.3rem; margin: 0 0 12px; }
+    form { display: flex; gap: 8px; margin-bottom: 12px; }
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #1b1b1b;
+      color: #eee;
+      font-size: 15px;
+    }
+    button {
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 8px;
+      background: #3b82f6;
+      color: #fff;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    video {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 8px;
+    }
+    #msg, #status {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #9a9aa8;
+      min-height: 1.2em;
+      word-break: break-all;
+    }
+    #msg.error, #status.error { color: #ff6b6b; }
+    #msg.ok { color: #6bd98a; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Stream Capture Player</h1>
+
+    <form id="targetForm">
+      <input id="pageUrl" type="url" required placeholder="Paste the page URL here">
+      <button type="submit">Start</button>
+    </form>
+    <div id="msg"></div>
+
+    <video id="player" controls autoplay muted playsinline></video>
+    <div id="status">Waiting for a page URL…</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+  <script>
+    (() => {
+      'use strict';
+
+      const POLL_MS = 5000;
+      const video = document.getElementById('player');
+      const form = document.getElementById('targetForm');
+      const input = document.getElementById('pageUrl');
+      const msgEl = document.getElementById('msg');
+      const statusEl = document.getElementById('status');
+
+      let hls = null;
+      let currentStream = null;
+
+      function setText(el, text, kind = '') {
+        el.textContent = text;
+        el.className = kind;
+      }
+
+      function playStream(url) {
+        if (hls) { hls.destroy(); hls = null; }
+        if (window.Hls && Hls.isSupported()) {
+          hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+          hls.on(Hls.Events.ERROR, (_e, data) => {
+            if (data.fatal) setText(statusEl, `Player error: ${data.details}`, 'error');
+          });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = url; // Native HLS (iOS Safari).
+          video.play().catch(() => {});
+        } else {
+          setText(statusEl, 'This browser cannot play HLS.', 'error');
+        }
+      }
+
+      async function pollStream() {
+        try {
+          const res = await fetch(`/api/stream?t=${Date.now()}`, { cache: 'no-store' });
+          if (res.status === 404) return;
+          const data = await res.json();
+          if (data.url && data.url !== currentStream) {
+            currentStream = data.url;
+            setText(statusEl, 'New stream found, playing…', 'ok');
+            playStream(data.url);
+          }
+        } catch (err) {
+          setText(statusEl, 'Server unreachable, retrying…', 'error');
+        }
+      }
+
+      async function pollStatus() {
+        try {
+          const res = await fetch(`/api/status?t=${Date.now()}`, { cache: 'no-store' });
+          const data = await res.json();
+          if (!currentStream && data.last_error) {
+            setText(statusEl, `Capturing… (${data.stage.name}) ${data.last_error}`, '');
+          } else if (!currentStream) {
+            setText(statusEl, `Capturing… (${data.stage.name})`, '');
+          }
+        } catch (_) { /* ignore */ }
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const pageUrl = input.value.trim();
+        setText(msgEl, 'Sending…');
+        try {
+          const res = await fetch('/api/target', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_url: pageUrl }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          currentStream = null;
+          setText(msgEl, 'Started. Capturing the stream…', 'ok');
+          setText(statusEl, 'Capturing…');
+        } catch (err) {
+          setText(msgEl, `Failed: ${err.message}`, 'error');
+        }
+      });
+
+      pollStream();
+      pollStatus();
+      setInterval(pollStream, POLL_MS);
+      setInterval(pollStatus, POLL_MS);
+    })();
+  </script>
+</body>
+</html>
