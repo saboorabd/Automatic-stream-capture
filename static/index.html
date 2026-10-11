@@ -16,7 +16,8 @@
     }
     .wrap { max-width: 960px; margin: 0 auto; }
     h1 { font-size: 1.3rem; margin: 0 0 12px; }
-    form { display: flex; gap: 8px; margin-bottom: 12px; }
+    h2 { font-size: 1rem; margin: 16px 0 6px; color: #9a9aa8; font-weight: 500; }
+    form { display: flex; gap: 8px; margin-bottom: 8px; }
     input {
       flex: 1;
       min-width: 0;
@@ -41,6 +42,7 @@
       aspect-ratio: 16 / 9;
       background: #000;
       border-radius: 8px;
+      margin-top: 12px;
     }
     #msg, #status {
       margin-top: 10px;
@@ -50,21 +52,28 @@
       word-break: break-all;
     }
     #msg.error, #status.error { color: #ff6b6b; }
-    #msg.ok { color: #6bd98a; }
+    #msg.ok, #status.ok { color: #6bd98a; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Stream Capture Player</h1>
 
-    <form id="targetForm">
-      <input id="pageUrl" type="url" required placeholder="Paste the page URL here">
-      <button type="submit">Start</button>
+    <h2>Option 1: page URL (auto-capture)</h2>
+    <form id="pageForm">
+      <input id="pageUrl" type="url" placeholder="Paste the page URL here">
+      <button type="submit">Capture</button>
     </form>
-    <div id="msg"></div>
 
+    <h2>Option 2: direct .m3u8 URL</h2>
+    <form id="streamForm">
+      <input id="streamUrl" type="url" placeholder="Paste the .m3u8 link here">
+      <button type="submit">Play</button>
+    </form>
+
+    <div id="msg"></div>
     <video id="player" controls autoplay muted playsinline></video>
-    <div id="status">Waiting for a page URL…</div>
+    <div id="status">Waiting for a stream…</div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
@@ -74,8 +83,10 @@
 
       const POLL_MS = 5000;
       const video = document.getElementById('player');
-      const form = document.getElementById('targetForm');
-      const input = document.getElementById('pageUrl');
+      const pageForm = document.getElementById('pageForm');
+      const streamForm = document.getElementById('streamForm');
+      const pageInput = document.getElementById('pageUrl');
+      const streamInput = document.getElementById('streamUrl');
       const msgEl = document.getElementById('msg');
       const statusEl = document.getElementById('status');
 
@@ -87,18 +98,18 @@
         el.className = kind;
       }
 
-      function playStream(url) {
+      function playStream(proxyUrl) {
         if (hls) { hls.destroy(); hls = null; }
         if (window.Hls && Hls.isSupported()) {
           hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
-          hls.loadSource(url);
+          hls.loadSource(proxyUrl);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
           hls.on(Hls.Events.ERROR, (_e, data) => {
-            if (data.fatal) setText(statusEl, `Player error: ${data.details}`, 'error');
+            if (data.fatal) setText(statusEl, `Player error: ${data.type} / ${data.details}`, 'error');
           });
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = url; // Native HLS (iOS Safari).
+          video.src = proxyUrl; // Native HLS (iOS Safari).
           video.play().catch(() => {});
         } else {
           setText(statusEl, 'This browser cannot play HLS.', 'error');
@@ -112,41 +123,52 @@
           const data = await res.json();
           if (data.url && data.url !== currentStream) {
             currentStream = data.url;
-            setText(statusEl, 'New stream found, playing…', 'ok');
-            playStream(data.url);
+            setText(statusEl, 'Stream found, playing…', 'ok');
+            playStream(data.proxy_url);
           }
-        } catch (err) {
+        } catch (_) {
           setText(statusEl, 'Server unreachable, retrying…', 'error');
         }
       }
 
       async function pollStatus() {
+        if (currentStream) return;
         try {
           const res = await fetch(`/api/status?t=${Date.now()}`, { cache: 'no-store' });
           const data = await res.json();
-          if (!currentStream && data.last_error) {
-            setText(statusEl, `Capturing… (${data.stage.name}) ${data.last_error}`, '');
-          } else if (!currentStream) {
-            setText(statusEl, `Capturing… (${data.stage.name})`, '');
-          }
+          const err = data.last_error ? ` — ${data.last_error}` : '';
+          setText(statusEl, `Capturing… (${data.stage.name})${err}`);
         } catch (_) { /* ignore */ }
       }
 
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const pageUrl = input.value.trim();
+      async function send(body) {
         setText(msgEl, 'Sending…');
+        const res = await fetch('/api/target', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        currentStream = null;
+        return data;
+      }
+
+      pageForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
         try {
-          const res = await fetch('/api/target', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ page_url: pageUrl }),
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-          currentStream = null;
-          setText(msgEl, 'Started. Capturing the stream…', 'ok');
-          setText(statusEl, 'Capturing…');
+          await send({ page_url: pageInput.value.trim() });
+          setText(msgEl, 'Capture started. This takes about a minute.', 'ok');
+        } catch (err) {
+          setText(msgEl, `Failed: ${err.message}`, 'error');
+        }
+      });
+
+      streamForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try {
+          await send({ stream_url: streamInput.value.trim() });
+          setText(msgEl, 'Stream set.', 'ok');
         } catch (err) {
           setText(msgEl, `Failed: ${err.message}`, 'error');
         }
