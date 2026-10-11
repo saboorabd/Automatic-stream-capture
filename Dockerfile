@@ -14,6 +14,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-ENV PYTHONUNBUFFERED=1 EXTENSION_DIR=/opt/extension
-# Extensions need a real (headful) Chromium, so it runs on a virtual display.
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 1280x720x24", "python", "app.py"]
+ENV PYTHONUNBUFFERED=1 EXTENSION_DIR=/opt/extension DISPLAY=:99
+
+# Start a virtual display in the background, then the web app (which binds to $PORT).
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & sleep 3 && exec python app.py"]
