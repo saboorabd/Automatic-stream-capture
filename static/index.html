@@ -1,184 +1,313 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stream Capture Player</title>
-  <style>
-    :root { color-scheme: dark; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 16px;
-      background: #0b0b0f;
-      color: #e8e8ee;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    }
-    .wrap { max-width: 960px; margin: 0 auto; }
-    h1 { font-size: 1.3rem; margin: 0 0 12px; }
-    h2 { font-size: 1rem; margin: 16px 0 6px; color: #9a9aa8; font-weight: 500; }
-    form { display: flex; gap: 8px; margin-bottom: 8px; }
-    input {
-      flex: 1;
-      min-width: 0;
-      padding: 12px;
-      border-radius: 8px;
-      border: 1px solid #333;
-      background: #1b1b1b;
-      color: #eee;
-      font-size: 15px;
-    }
-    button {
-      padding: 12px 18px;
-      border: 0;
-      border-radius: 8px;
-      background: #3b82f6;
-      color: #fff;
-      font-size: 15px;
-      cursor: pointer;
-    }
-    video {
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      background: #000;
-      border-radius: 8px;
-      margin-top: 12px;
-    }
-    #msg, #status {
-      margin-top: 10px;
-      font-size: 14px;
-      color: #9a9aa8;
-      min-height: 1.2em;
-      word-break: break-all;
-    }
-    #msg.error, #status.error { color: #ff6b6b; }
-    #msg.ok, #status.ok { color: #6bd98a; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stream Capture</title>
+<style>
+:root {
+  --bg: #070a12; --card: #0f1524; --line: #1e2a44; --text: #e7ecf7; --muted: #8b97b5;
+  --accent: #6d8bff; --accent2: #a277ff; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; padding: 20px; color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, #1b2750 0, transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, #3a1f5c 0, transparent 55%),
+    var(--bg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.wrap { max-width: 1000px; margin: 0 auto; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.brand {
+  font-weight: 700; font-size: 1.25rem; color: transparent;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text; background-clip: text;
+}
+.pill { padding: 6px 12px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
+.pill.ok { color: var(--ok); border-color: #1f5b47; }
+.pill.warn { color: var(--warn); border-color: #5b4a1f; }
+.pill.err { color: var(--err); border-color: #5b2a2a; }
+.grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 860px) { .grid { grid-template-columns: 1.4fr 1fr; } }
+.card {
+  background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,0)), var(--card);
+  border: 1px solid var(--line); border-radius: 16px; padding: 18px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+}
+.card h2 { margin: 0 0 12px; font-size: .8rem; color: var(--muted); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+form { display: flex; gap: 8px; margin-bottom: 10px; }
+input {
+  flex: 1; min-width: 0; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: #0b1020; color: var(--text); font-size: 15px; outline: none;
+}
+input:focus { border-color: var(--accent); }
+button {
+  padding: 12px 18px; border: 0; border-radius: 12px; cursor: pointer; white-space: nowrap;
+  background: linear-gradient(90deg, var(--accent), var(--accent2)); color: #fff; font-weight: 600; font-size: 15px;
+}
+button:disabled { opacity: .5; cursor: default; }
+button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; font-size: 14px; padding: 10px 14px; }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0 6px; }
+.step {
+  text-align: center; padding: 10px 4px; border-radius: 12px; border: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); background: #0b1020; transition: .3s;
+}
+.step b { display: block; font-size: 18px; margin-bottom: 2px; }
+.step.done { color: var(--ok); border-color: #1f5b47; }
+.step.active { color: var(--text); border-color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(109,139,255,.08); } }
+.detail { font-size: 13px; color: var(--muted); margin-top: 10px; min-height: 1.2em; word-break: break-word; }
+.detail.err { color: var(--err); }
+video {
+  width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 14px; border: 1px solid var(--line); display: none;
+}
+.empty {
+  display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px;
+  aspect-ratio: 16 / 9; border-radius: 14px; border: 1px dashed var(--line); color: var(--muted); font-size: 14px;
+}
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.kv { font-size: 12px; color: var(--muted); }
+.spacer { flex: 1; }
+.toast {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); opacity: 0; transition: .3s;
+  background: #16213a; border: 1px solid var(--line); padding: 10px 16px; border-radius: 12px; font-size: 14px; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Stream Capture Player</h1>
+<div class="wrap">
+  <header>
+    <div class="brand">Stream Capture</div>
+    <span id="pill" class="pill">Connecting…</span>
+  </header>
 
-    <h2>Option 1: page URL (auto-capture)</h2>
-    <form id="pageForm">
-      <input id="pageUrl" type="url" placeholder="Paste the page URL here">
-      <button type="submit">Capture</button>
-    </form>
+  <div class="grid">
+    <section class="card">
+      <h2>Player</h2>
+      <div id="empty" class="empty">No stream yet. Paste a page URL or a .m3u8 link to start.</div>
+      <video id="player" controls autoplay muted playsinline></video>
+      <div class="meta">
+        <span id="age" class="kv"></span>
+        <span class="spacer"></span>
+        <button id="copyProxy" class="ghost" type="button">Copy proxy link</button>
+        <button id="copyRaw" class="ghost" type="button">Copy raw link</button>
+      </div>
+    </section>
 
-    <h2>Option 2: direct .m3u8 URL</h2>
-    <form id="streamForm">
-      <input id="streamUrl" type="url" placeholder="Paste the .m3u8 link here">
-      <button type="submit">Play</button>
-    </form>
+    <section class="card">
+      <h2>Source</h2>
+      <form id="pageForm">
+        <input id="pageUrl" type="url" placeholder="Page URL (auto-capture)" required>
+        <button id="pageBtn" type="submit">Capture</button>
+      </form>
+      <form id="streamForm">
+        <input id="streamUrl" type="url" placeholder="Direct .m3u8 link" required>
+        <button id="streamBtn" type="submit">Play</button>
+      </form>
 
-    <div id="msg"></div>
-    <video id="player" controls autoplay muted playsinline></video>
-    <div id="status">Waiting for a stream…</div>
+      <div class="steps">
+        <div class="step" data-step="0"><b>1</b>Launch</div>
+        <div class="step" data-step="1"><b>2</b>Open</div>
+        <div class="step" data-step="2"><b>3</b>Detect</div>
+        <div class="step" data-step="3"><b>4</b>Play</div>
+      </div>
+      <div id="detail" class="detail"></div>
+    </section>
   </div>
+</div>
+<div id="toast" class="toast"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-  <script>
-    (() => {
-      'use strict';
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script>
+(() => {
+  'use strict';
 
-      const POLL_MS = 5000;
-      const video = document.getElementById('player');
-      const pageForm = document.getElementById('pageForm');
-      const streamForm = document.getElementById('streamForm');
-      const pageInput = document.getElementById('pageUrl');
-      const streamInput = document.getElementById('streamUrl');
-      const msgEl = document.getElementById('msg');
-      const statusEl = document.getElementById('status');
+  const $ = (id) => document.getElementById(id);
+  const video = $('player');
+  const empty = $('empty');
+  const pill = $('pill');
+  const detail = $('detail');
+  const age = $('age');
+  const toast = $('toast');
+  const steps = [...document.querySelectorAll('.step')];
 
-      let hls = null;
-      let currentStream = null;
+  let hls = null;
+  let currentRaw = null;
+  let currentProxy = null;
 
-      function setText(el, text, kind = '') {
-        el.textContent = text;
-        el.className = kind;
-      }
+  function showToast(text) {
+    toast.textContent = text;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1600);
+  }
 
-      function playStream(proxyUrl) {
-        if (hls) { hls.destroy(); hls = null; }
-        if (window.Hls && Hls.isSupported()) {
-          hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
-          hls.loadSource(proxyUrl);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-          hls.on(Hls.Events.ERROR, (_e, data) => {
-            if (data.fatal) setText(statusEl, `Player error: ${data.type} / ${data.details}`, 'error');
-          });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = proxyUrl; // Native HLS (iOS Safari).
-          video.play().catch(() => {});
-        } else {
-          setText(statusEl, 'This browser cannot play HLS.', 'error');
-        }
-      }
+  function setPill(kind, text) {
+    pill.className = 'pill ' + kind;
+    pill.textContent = text;
+  }
 
-      async function pollStream() {
-        try {
-          const res = await fetch(`/api/stream?t=${Date.now()}`, { cache: 'no-store' });
-          if (res.status === 404) return;
-          const data = await res.json();
-          if (data.url && data.url !== currentStream) {
-            currentStream = data.url;
-            setText(statusEl, 'Stream found, playing…', 'ok');
-            playStream(data.proxy_url);
-          }
-        } catch (_) {
-          setText(statusEl, 'Server unreachable, retrying…', 'error');
-        }
-      }
+  function setDetail(text, isError = false) {
+    detail.textContent = text;
+    detail.className = 'detail' + (isError ? ' err' : '');
+  }
 
-      async function pollStatus() {
-        if (currentStream) return;
-        try {
-          const res = await fetch(`/api/status?t=${Date.now()}`, { cache: 'no-store' });
-          const data = await res.json();
-          const err = data.last_error ? ` — ${data.last_error}` : '';
-          setText(statusEl, `Capturing… (${data.stage.name})${err}`);
-        } catch (_) { /* ignore */ }
-      }
+  function stepIndex(name) {
+    if (!name) return -1;
+    if (name === 'launching_chrome' || name === 'chrome_started') return 0;
+    if (name === 'opening_page' || name === 'page_loaded') return 1;
+    if (name === 'waiting_for_stream' || name.startsWith('clicked_')) return 2;
+    if (name === 'stream_found') return 3;
+    return -1;
+  }
 
-      async function send(body) {
-        setText(msgEl, 'Sending…');
-        const res = await fetch('/api/target', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        currentStream = null;
-        return data;
-      }
+  function renderSteps(activeIdx, allDone = false) {
+    steps.forEach((el, i) => {
+      el.classList.toggle('done', allDone || i < activeIdx);
+      el.classList.toggle('active', !allDone && i === activeIdx);
+    });
+  }
 
-      pageForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        try {
-          await send({ page_url: pageInput.value.trim() });
-          setText(msgEl, 'Capture started. This takes about a minute.', 'ok');
-        } catch (err) {
-          setText(msgEl, `Failed: ${err.message}`, 'error');
-        }
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+    if (s < 60) return `${Math.floor(s)}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+  }
+
+  function explain(errorText) {
+    try {
+      const d = JSON.parse(errorText);
+      return `${d.diagnosis} (extension links: ${d.extension_links ?? '?'}, frames: ${d.frames ?? '?'})`;
+    } catch (_) {
+      return errorText || '';
+    }
+  }
+
+  function playStream(proxyUrl) {
+    if (hls) { hls.destroy(); hls = null; }
+    video.removeAttribute('src');
+    empty.style.display = 'none';
+    video.style.display = 'block';
+
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
+      hls.loadSource(proxyUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+      hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (data.fatal) setDetail(`Player error: ${data.type} / ${data.details}`, true);
       });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = proxyUrl; // Native HLS (iOS Safari).
+      video.play().catch(() => {});
+    } else {
+      setDetail('This browser cannot play HLS.', true);
+    }
+  }
 
-      streamForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        try {
-          await send({ stream_url: streamInput.value.trim() });
-          setText(msgEl, 'Stream set.', 'ok');
-        } catch (err) {
-          setText(msgEl, `Failed: ${err.message}`, 'error');
-        }
-      });
+  async function pollStream() {
+    try {
+      const res = await fetch(`/api/stream?t=${Date.now()}`, { cache: 'no-store' });
+      if (res.status === 404) return;
+      const data = await res.json();
+      age.textContent = data.updated_at ? `Updated ${timeAgo(data.updated_at)}` : '';
+      if (data.url && data.url !== currentRaw) {
+        currentRaw = data.url;
+        currentProxy = data.proxy_url;
+        playStream(data.proxy_url);
+      }
+    } catch (_) { /* server asleep or restarting; next poll retries */ }
+  }
 
-      pollStream();
-      pollStatus();
-      setInterval(pollStream, POLL_MS);
-      setInterval(pollStatus, POLL_MS);
-    })();
-  </script>
+  async function pollStatus() {
+    try {
+      const res = await fetch(`/api/status?t=${Date.now()}`, { cache: 'no-store' });
+      const s = await res.json();
+      const name = (s.stage && s.stage.name) || 'idle';
+      const idx = stepIndex(name);
+
+      if (currentRaw) {
+        setPill('ok', 'Playing');
+        renderSteps(0, true);
+        setDetail('Stream is live. It refreshes automatically.');
+      } else if (name === 'timeout_no_stream') {
+        setPill('err', 'No stream');
+        renderSteps(2);
+        setDetail(explain(s.stage.error), true);
+      } else if (idx >= 0) {
+        setPill('warn', 'Capturing');
+        renderSteps(idx);
+        setDetail(s.last_error ? explain(s.last_error) : `Working: ${name.replace(/_/g, ' ')}`);
+      } else {
+        setPill('', s.page_url ? 'Idle' : 'Ready');
+        renderSteps(-1);
+        setDetail(s.last_error ? explain(s.last_error) : 'Paste a page URL or a .m3u8 link to start.');
+      }
+    } catch (_) {
+      setPill('err', 'Offline');
+      setDetail('Server unreachable. Retrying…', true);
+    }
+  }
+
+  async function send(body) {
+    const res = await fetch('/api/target', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    currentRaw = null;
+    currentProxy = null;
+    return data;
+  }
+
+  async function submitWith(btnId, body, okText) {
+    const btn = $(btnId);
+    btn.disabled = true;
+    try {
+      await send(body);
+      showToast(okText);
+      renderSteps(0);
+      setPill('warn', 'Capturing');
+    } catch (err) {
+      showToast(`Failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $('pageForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitWith('pageBtn', { page_url: $('pageUrl').value.trim() }, 'Capture started');
+  });
+
+  $('streamForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitWith('streamBtn', { stream_url: $('streamUrl').value.trim() }, 'Stream set');
+  });
+
+  $('copyProxy').addEventListener('click', async () => {
+    if (!currentProxy) return showToast('No stream yet');
+    await navigator.clipboard.writeText(location.origin + currentProxy).catch(() => {});
+    showToast('Proxy link copied');
+  });
+
+  $('copyRaw').addEventListener('click', async () => {
+    if (!currentRaw) return showToast('No stream yet');
+    await navigator.clipboard.writeText(currentRaw).catch(() => {});
+    showToast('Raw link copied');
+  });
+
+  pollStatus();
+  pollStream();
+  setInterval(pollStatus, 3000);
+  setInterval(pollStream, 4000);
+})();
+</script>
 </body>
 </html>
