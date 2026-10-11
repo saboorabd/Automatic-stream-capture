@@ -1,9 +1,11 @@
 """
 One capture cycle:
-  1. Opens a fresh incognito Chrome via SeleniumBase (UC mode).
+  1. Opens a fresh incognito Chrome (system Chrome from Dockerfile).
   2. Loads the page and tries to start playback.
   3. Reads the browser's resource list for a matching .m3u8 URL.
   4. Closes the browser, so no session data survives.
+
+STAGE shows the current step, so /api/status tells where it is stuck.
 """
 
 import re
@@ -13,32 +15,39 @@ from datetime import datetime
 from selenium.webdriver.common.by import By
 from seleniumbase import Driver
 
+STAGE = {"name": "idle", "since": None}
 
-def log(message: str) -> None:
-    print(f"[{datetime.now():%H:%M:%S}] [capture] {message}", flush=True)
+
+def set_stage(name: str) -> None:
+    STAGE["name"] = name
+    STAGE["since"] = datetime.now().isoformat(timespec="seconds")
+    print(f"[{datetime.now():%H:%M:%S}] [capture] {name}", flush=True)
 
 
 def capture_once(cfg: dict) -> str | None:
     pattern = re.compile(cfg["stream_pattern"], re.IGNORECASE)
-
-    log("Launching Chrome...")
-    driver = Driver(
-        uc=True,
-        headless=cfg["headless"],
-        incognito=True,
-        no_sandbox=True,  # Required when running as root inside Docker.
-        chromium_arg="--disable-dev-shm-usage,--disable-gpu",  # Docker /dev/shm is tiny.
-    )
-    log("Chrome started.")
+    driver = None
 
     try:
+        set_stage("launching_chrome")
+        driver = Driver(
+            browser="chrome",
+            headless=cfg["headless"],
+            incognito=True,
+            no_sandbox=True,
+            chromium_arg="--disable-dev-shm-usage,--disable-gpu,--autoplay-policy=no-user-gesture-required",
+        )
+        driver.set_page_load_timeout(30)
+        set_stage("chrome_started")
+
+        set_stage("opening_page")
         driver.get(cfg["page_url"])
-        log(f"Opened {cfg['page_url']}")
+        set_stage("page_loaded")
 
         for selector in cfg.get("play_selectors", []):
             try:
                 driver.find_element(By.CSS_SELECTOR, selector).click()
-                log(f"Clicked '{selector}'")
+                set_stage(f"clicked_{selector}")
                 break
             except Exception:
                 continue
@@ -48,6 +57,7 @@ def capture_once(cfg: dict) -> str | None:
             "if (v) { v.muted = true; v.play().catch(() => {}); }"
         )
 
+        set_stage("waiting_for_stream")
         deadline = time.monotonic() + cfg["capture_timeout_s"]
         while time.monotonic() < deadline:
             urls = driver.execute_script(
@@ -55,12 +65,15 @@ def capture_once(cfg: dict) -> str | None:
             )
             for url in urls:
                 if pattern.search(url):
-                    log(f"Found stream: {url}")
+                    set_stage("stream_found")
+                    print(f"[capture] Found stream: {url}", flush=True)
                     return url
             time.sleep(1)
 
-        log("Timeout: no .m3u8 request seen.")
+        set_stage("timeout_no_stream")
         return None
+
     finally:
-        driver.quit()
-        log("Chrome closed.")
+        if driver is not None:
+            driver.quit()
+        set_stage("idle")
