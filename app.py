@@ -1,28 +1,36 @@
 """
 Stream Capture server.
-  - Background thread: runs a capture cycle every refresh_interval_s.
-  - GET /api/stream : latest captured .m3u8 URL as JSON.
-  - GET /api/status : current state, stage, and last error.
-  - GET /           : player page (static/index.html).
+  - POST /api/target : set the page URL to capture (from the web form).
+  - GET  /api/stream : latest captured .m3u8 URL as JSON.
+  - GET  /api/status : current state, stage, and last error.
+  - GET  /           : player page with the URL form.
 """
 
 import json
 import os
 import threading
-import time
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+import traceback
+import time
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 from capture import STAGE, capture_once
 
 BASE_DIR = Path(__file__).resolve().parent
 CFG = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
 
-STATE = {"url": None, "updated_at": None, "last_error": None, "cycles": 0}
+STATE = {
+    "page_url": CFG["page_url"],
+    "url": None,
+    "updated_at": None,
+    "last_error": None,
+    "cycles": 0,
+}
 LOCK = threading.Lock()
+WAKE = threading.Event()  # Set when a new page URL arrives, so capture starts now.
 
 app = Flask(__name__)
 
@@ -31,16 +39,23 @@ def log(message: str) -> None:
     print(f"[{datetime.now():%H:%M:%S}] [app] {message}", flush=True)
 
 
+def is_valid_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
 def capture_loop() -> None:
     log("Capture loop started.")
     while True:
         with LOCK:
             STATE["cycles"] += 1
             cycle = STATE["cycles"]
-        log(f"Cycle {cycle} starting.")
+            page_url = STATE["page_url"]
+        log(f"Cycle {cycle} on {page_url}")
 
         try:
-            url = capture_once(CFG)
+            run_cfg = {**CFG, "page_url": page_url}
+            url = capture_once(run_cfg)
             with LOCK:
                 if url:
                     if url != STATE["url"]:
@@ -50,36 +65,34 @@ def capture_loop() -> None:
                 else:
                     STATE["last_error"] = "No stream request seen within timeout"
         except Exception as exc:
-            tb = traceback.format_exc()
-            log(f"Cycle {cycle} failed:\n{tb}")
+            log(f"Cycle {cycle} failed:\n{traceback.format_exc()}")
             with LOCK:
                 STATE["last_error"] = f"{type(exc).__name__}: {exc}"
 
-        time.sleep(CFG["refresh_interval_s"])
+        WAKE.wait(CFG["refresh_interval_s"])
+        WAKE.clear()
+
+
+@app.post("/api/target")
+def api_target():
+    body = request.get_json(silent=True) or {}
+    page_url = str(body.get("page_url", "")).strip()
+
+    if not is_valid_http_url(page_url):
+        return jsonify({"error": "Enter a full http(s) URL"}), 400
+
+    with LOCK:
+        STATE["page_url"] = page_url
+        STATE["url"] = None
+        STATE["updated_at"] = None
+        STATE["last_error"] = None
+
+    WAKE.set()
+    log(f"New target set: {page_url}")
+    return jsonify({"ok": True, "page_url": page_url}), 202
 
 
 @app.get("/api/stream")
 def api_stream():
     with LOCK:
         if not STATE["url"]:
-            return jsonify({"error": "No stream captured yet", "last_error": STATE["last_error"]}), 404
-        return jsonify({"url": STATE["url"], "updated_at": STATE["updated_at"]})
-
-
-@app.get("/api/status")
-def api_status():
-    with LOCK:
-        data = dict(STATE)
-    data["stage"] = dict(STAGE)
-    return jsonify(data)
-
-
-@app.get("/")
-def index():
-    return send_from_directory(BASE_DIR / "static", "index.html")
-
-
-threading.Thread(target=capture_loop, daemon=True).start()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
