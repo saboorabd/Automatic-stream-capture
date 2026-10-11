@@ -18,6 +18,27 @@ from seleniumbase import Driver
 
 STAGE = {"name": "idle", "since": None, "error": None}
 
+PLAY_VIDEO_JS = """
+const v = document.querySelector('video');
+if (v) { v.muted = true; v.play().catch(() => {}); }
+"""
+
+RESOURCE_URLS_JS = """
+return performance.getEntriesByType('resource').map(e => e.name);
+"""
+
+SNAPSHOT_JS = """
+return {
+  title: document.title,
+  videos: document.querySelectorAll('video').length,
+  iframes: document.querySelectorAll('iframe').length,
+  buttons: [...document.querySelectorAll('button')].slice(0, 15).map(
+    b => (b.className || '') + ' | ' + (b.innerText || '').trim().slice(0, 30)
+  ),
+  resources: performance.getEntriesByType('resource').length
+};
+"""
+
 
 def set_stage(name):
     STAGE["name"] = name
@@ -67,15 +88,49 @@ def click_play(driver, selectors):
 
 
 def start_video(driver):
-    driver.execute_script(
-        "const v = document.querySelector('video');"
-        "if (v) { v.muted = true; v.play().catch(() => {}); }"
-    )
+    driver.execute_script(PLAY_VIDEO_JS)
 
 
-def snapshot(driver):
-    return driver.execute_script(
-        "return {"
-        "  title: document.title,"
-        "  videos: document.querySelectorAll('video').length,"
-        "  iframes: document.querySelectorAll('ifr
+def wait_for_stream(driver, pattern, timeout_s):
+    set_stage("waiting_for_stream")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        urls = driver.execute_script(RESOURCE_URLS_JS)
+        for url in urls:
+            if pattern.search(url):
+                set_stage("stream_found")
+                print(f"[capture] Found stream: {url}", flush=True)
+                return url
+        time.sleep(1)
+
+    info = driver.execute_script(SNAPSHOT_JS)
+    print(f"[capture] page snapshot: {info}", flush=True)
+    STAGE["error"] = f"no stream. snapshot: {info}"
+    set_stage("timeout_no_stream")
+    return None
+
+
+def capture_once(cfg):
+    pattern = re.compile(cfg["stream_pattern"], re.IGNORECASE)
+    STAGE["error"] = None
+    driver = None
+
+    try:
+        driver = launch_chrome(cfg)
+        open_page(driver, cfg["page_url"])
+        click_play(driver, cfg.get("play_selectors", []))
+        start_video(driver)
+        return wait_for_stream(driver, pattern, cfg["capture_timeout_s"])
+
+    except Exception as exc:
+        STAGE["error"] = f"{type(exc).__name__}: {exc}"
+        print(traceback.format_exc(), flush=True)
+        raise
+
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        set_stage("idle")
