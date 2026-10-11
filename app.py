@@ -9,11 +9,10 @@ Stream Capture server.
 import json
 import os
 import threading
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
-import traceback
-import time
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -30,27 +29,28 @@ STATE = {
     "cycles": 0,
 }
 LOCK = threading.Lock()
-WAKE = threading.Event()  # Set when a new page URL arrives, so capture starts now.
+WAKE = threading.Event()
 
 app = Flask(__name__)
 
 
-def log(message: str) -> None:
+def log(message):
     print(f"[{datetime.now():%H:%M:%S}] [app] {message}", flush=True)
 
 
-def is_valid_http_url(value: str) -> bool:
+def is_valid_http_url(value):
     parsed = urlparse(value)
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def capture_loop() -> None:
+def capture_loop():
     log("Capture loop started.")
     while True:
         with LOCK:
             STATE["cycles"] += 1
             cycle = STATE["cycles"]
             page_url = STATE["page_url"]
+
         log(f"Cycle {cycle} on {page_url}")
 
         try:
@@ -95,4 +95,29 @@ def api_target():
 @app.get("/api/stream")
 def api_stream():
     with LOCK:
-        if not STATE["url"]:
+        url = STATE["url"]
+        updated_at = STATE["updated_at"]
+        last_error = STATE["last_error"]
+
+    if not url:
+        return jsonify({"error": "No stream captured yet", "last_error": last_error}), 404
+    return jsonify({"url": url, "updated_at": updated_at})
+
+
+@app.get("/api/status")
+def api_status():
+    with LOCK:
+        data = dict(STATE)
+    data["stage"] = dict(STAGE)
+    return jsonify(data)
+
+
+@app.get("/")
+def index():
+    return send_from_directory(BASE_DIR / "static", "index.html")
+
+
+threading.Thread(target=capture_loop, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
