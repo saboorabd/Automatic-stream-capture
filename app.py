@@ -2,7 +2,7 @@
 Stream Capture server.
   - Background thread: runs a capture cycle every refresh_interval_s.
   - GET /api/stream : latest captured .m3u8 URL as JSON.
-  - GET /api/status : current state, including last error (for debugging).
+  - GET /api/status : current state, stage, and last error.
   - GET /           : player page (static/index.html).
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
 
-from capture import capture_once
+from capture import STAGE, capture_once
 
 BASE_DIR = Path(__file__).resolve().parent
 CFG = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
@@ -69,7 +69,9 @@ def api_stream():
 @app.get("/api/status")
 def api_status():
     with LOCK:
-        return jsonify(dict(STATE))
+        data = dict(STATE)
+    data["stage"] = dict(STAGE)
+    return jsonify(data)
 
 
 @app.get("/")
