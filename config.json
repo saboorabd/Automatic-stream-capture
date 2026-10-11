@@ -3,6 +3,6 @@
   "play_selectors": ["button.play", "video"],
   "stream_pattern": "\\.m3u8(?:$|[?#])",
   "capture_timeout_s": 60,
-  "refresh_interval_s": 300,
+  "refresh_interval_s": 30,
   "headless": false
 }
