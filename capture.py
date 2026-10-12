@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from display import ensure_display
 
 STAGE = {"name": "idle", "since": None, "error": None}
 
@@ -176,6 +177,7 @@ def scan_page_sources(page):
 
 
 def open_session():
+    ensure_display()
     exts = discover_extensions()
     profile = tempfile.mkdtemp(prefix="vle-")
     pw = sync_playwright().start()
