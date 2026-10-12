@@ -151,8 +151,10 @@
   };
 
   let hls = null;
-  let rawUrl = null;
-  let proxyUrl = null;
+  let rawUrl = null;      // The stream as found (fastest path: played directly).
+  let proxyUrl = null;    // Same stream through the server proxy (fallback if CORS blocks direct).
+  let usingProxy = false;
+  let netRetries = 0;
   let statusTick = 0;
 
   function toastMsg(text) {
@@ -194,23 +196,47 @@
     }
   }
 
-  // Keeps one hls.js instance. Switching streams swaps the source without a black flash.
-  function attach(url) {
-    if (window.Hls && Hls.isSupported()) {
-      if (!hls) {
-        hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 20 });
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-        hls.on(Hls.Events.ERROR, (_e, d) => {
-          if (!d.fatal) return;
-          if (d.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-          else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-          else showOverlay('Player error: ' + d.details, true);
-        });
+  // One hls.js instance, reused across streams (no black flash on switch).
+  function createHls() {
+    hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 20 });
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    hls.on(Hls.Events.FRAG_LOADED, () => { netRetries = 0; });
+    hls.on(Hls.Events.ERROR, (_e, d) => {
+      if (!d.fatal) return;
+
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // Direct play failed (usually CORS). Switch to the proxy once.
+        if (!usingProxy && proxyUrl) {
+          usingProxy = true;
+          netRetries = 0;
+          hls.loadSource(proxyUrl);
+          return;
+        }
+        netRetries += 1;
+        if (netRetries > 5) {
+          showOverlay('Stream unreachable. Waiting for a new capture…', true);
+          return;
+        }
+        hls.startLoad();
+      } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError();
+      } else {
+        showOverlay('Player error: ' + d.details, true);
       }
-      hls.loadSource(url);
+    });
+  }
+
+  // Direct first (fastest). Proxy is used only if the browser blocks the direct URL.
+  function attach(directUrl) {
+    if (window.Hls && Hls.isSupported()) {
+      if (!hls) createHls();
+      usingProxy = false;
+      netRetries = 0;
+      hls.loadSource(directUrl);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = url; // Native HLS (iOS Safari).
+      // Native HLS (iOS Safari) uses the proxy, since it cannot fall back on its own.
+      video.src = proxyUrl || directUrl;
       video.play().catch(() => {});
     } else {
       showOverlay('This browser cannot play HLS.', true);
@@ -233,7 +259,7 @@
         proxyUrl = data.proxy_url;
         hideOverlay();
         setPill('ok', 'Live');
-        attach(proxyUrl);
+        attach(rawUrl);
       }
     } catch (_) { /* server waking up; next tick retries */ }
   }
