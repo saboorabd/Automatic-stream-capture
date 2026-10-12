@@ -23,6 +23,7 @@ import requests
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from capture import STAGE, capture_once
+from cors import install_cors
 
 BASE_DIR = Path(__file__).resolve().parent
 CFG = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
@@ -40,8 +41,6 @@ LOCK = threading.Lock()
 WAKE = threading.Event()
 
 app = Flask(__name__)
-
-from cors import install_cors
 install_cors(app)
 
 
