@@ -1,9 +1,12 @@
 """
-Capture using the REAL extension, with ONE warm browser kept alive between cycles.
+Capture with ONE warm browser kept alive between cycles.
 
-  First cycle : launch Chromium + extension once.
-  Every cycle : clear the extension's old links, reload page_url, click play,
-                return the newest stream link. Much faster than relaunching.
+Three built-in sources, no third-party extension code needed beyond the
+video_link_extractor (source 1):
+  1. The video_link_extractor extension (its getLinks message).
+  2. Network sniffing: every request the browser makes, in every frame.
+  3. Page source scan: m3u8 URLs written inside the HTML/JS/JSON of each frame.
+Whichever finds a match first wins. The newest match is returned.
 """
 
 import json
@@ -20,8 +23,13 @@ STAGE = {"name": "idle", "since": None, "error": None}
 
 EXT_DIR = os.environ.get("EXTENSION_DIR", "/opt/extension")
 PROXY_URL = os.environ.get("PROXY_URL", "").strip()  # Optional.
+SEEN_CAP = 500
+SOURCE_SCAN_EVERY = 3  # Scan page source every 3rd loop (about every 3 seconds).
 
-_session = {"pw": None, "context": None, "page": None, "popup": None, "profile": None, "ext_id": None}
+M3U8_IN_TEXT = re.compile(r'https?:[^\s"\'<>]*?\.m3u8[^\s"\'<>]*', re.IGNORECASE)
+
+_session = {"pw": None, "context": None, "page": None, "popup": None,
+            "profile": None, "ext_id": None, "seen": None}
 
 PLAY_VIDEO_JS = """
 () => {
@@ -30,7 +38,6 @@ PLAY_VIDEO_JS = """
 }
 """
 
-# Runs inside the extension popup page (has chrome.runtime / chrome.tabs).
 COLLECT_LINKS_JS = """
 async () => {
   const self = await chrome.tabs.getCurrent();
@@ -75,7 +82,7 @@ def wait_for_extension_id(context):
         worker = context.service_workers[0]
     else:
         worker = context.wait_for_event("serviceworker", timeout=30_000)
-    return worker.url.split("/")[2]  # chrome-extension://<id>/background.js
+    return worker.url.split("/")[2]
 
 
 def open_session():
@@ -90,6 +97,7 @@ def open_session():
                 f"--load-extension={EXT_DIR}",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
                 "--autoplay-policy=no-user-gesture-required",
             ],
             "viewport": {"width": 1280, "height": 720},
@@ -98,6 +106,16 @@ def open_session():
             launch_kwargs["proxy"] = {"server": PROXY_URL}
 
         context = pw.chromium.launch_persistent_context(profile, **launch_kwargs)
+        seen = []
+
+        def on_request(request):
+            if "m3u8" in request.url.lower():
+                seen.append(request.url)
+                if len(seen) > SEEN_CAP:
+                    del seen[: SEEN_CAP // 2]
+
+        context.on("request", on_request)
+
         ext_id = wait_for_extension_id(context)
         page = context.new_page()
         popup = context.new_page()
@@ -108,7 +126,7 @@ def open_session():
         raise
 
     _session.update(pw=pw, context=context, page=page, popup=popup,
-                    profile=profile, ext_id=ext_id)
+                    profile=profile, ext_id=ext_id, seen=seen)
     set_stage("chrome_started")
 
 
@@ -149,6 +167,18 @@ def start_video(page):
             pass
 
 
+def scan_page_sources(page):
+    """Source 3: m3u8 URLs written inside the HTML/JS/JSON of every frame."""
+    found = []
+    for frame in page.frames:
+        try:
+            html = frame.content().replace("\\/", "/")  # Undo JSON-escaped slashes.
+        except Exception:
+            continue
+        found.extend(M3U8_IN_TEXT.findall(html))
+    return found
+
+
 def capture_once(cfg):
     pattern = re.compile(cfg["stream_pattern"], re.IGNORECASE)
     STAGE["error"] = None
@@ -161,8 +191,8 @@ def capture_once(cfg):
         page = _session["page"]
         popup = _session["popup"]
 
-        # Forget links from the previous cycle, so only fresh ones are returned.
         popup.evaluate(CLEAR_LINKS_JS)
+        _session["seen"].clear()
 
         set_stage("opening_page")
         try:
@@ -175,16 +205,27 @@ def capture_once(cfg):
         set_stage("waiting_for_stream")
         deadline = time.monotonic() + cfg["capture_timeout_s"]
         clicked = False
-        links = []
+        ext_links = []
+        source_hits = []
+        loop_no = 0
         while time.monotonic() < deadline:
             if not clicked:
                 clicked = click_play(page, cfg.get("play_selectors", []))
             start_video(page)
 
-            links = popup.evaluate(COLLECT_LINKS_JS)
-            matches = [item["url"] for item in links if pattern.search(item["url"])]
+            loop_no += 1
+            if loop_no % SOURCE_SCAN_EVERY == 1:
+                source_hits = scan_page_sources(page)
+
+            ext_links = popup.evaluate(COLLECT_LINKS_JS)
+            candidates = (
+                [item["url"] for item in ext_links]   # Source 1: extension
+                + list(_session["seen"])              # Source 2: network
+                + source_hits                         # Source 3: page source
+            )
+            matches = [u for u in candidates if pattern.search(u)]
             if matches:
-                stream = matches[-1]  # Newest match.
+                stream = matches[-1]
                 print(f"[capture] Found stream: {stream}", flush=True)
                 set_stage("stream_found")
                 return stream
@@ -196,12 +237,14 @@ def capture_once(cfg):
         except Exception:
             title = ""
         diag = {
-            "diagnosis": "Extension sniffed no matching stream. Check play_selectors or page_url.",
+            "diagnosis": "No matching stream from extension, network, or page source. Check play_selectors or page_url.",
             "page_title": title,
             "frames": len(page.frames),
             "clicked_play": clicked,
-            "extension_links": len(links),
-            "sample_links": [i["url"][:120] for i in links[:5]],
+            "extension_links": len(ext_links),
+            "network_m3u8_seen": len(_session["seen"]),
+            "page_source_m3u8": len(source_hits),
+            "sample_links": [i["url"][:120] for i in ext_links[:3]],
         }
         STAGE["error"] = json.dumps(diag, ensure_ascii=False)
         print(f"[capture] DIAGNOSIS: {STAGE['error']}", flush=True)
@@ -209,7 +252,6 @@ def capture_once(cfg):
         return None
 
     except Exception as exc:
-        # Browser may be broken. Drop it so the next cycle starts clean.
         STAGE["error"] = f"{type(exc).__name__}: {exc}"
         print(f"[capture] failed, resetting browser: {STAGE['error']}", flush=True)
         close_session()
