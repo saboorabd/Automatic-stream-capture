@@ -41,6 +41,9 @@ WAKE = threading.Event()
 
 app = Flask(__name__)
 
+from cors import install_cors
+install_cors(app)
+
 
 def log(message):
     print(f"[{datetime.now():%H:%M:%S}] [app] {message}", flush=True)
