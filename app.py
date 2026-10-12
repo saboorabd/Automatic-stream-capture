@@ -1,6 +1,6 @@
 """
 Stream Capture server.
-  - POST /api/target : set a page URL to capture, OR a direct .m3u8 URL.
+  - POST /api/target : a page URL (auto-capture) or a direct .m3u8 URL (manual play).
   - GET  /api/stream : current stream (raw url + proxy_url).
   - GET  /api/status : state, capture stage, last error.
   - GET  /proxy      : same-origin proxy. Adds Referer/Origin and CORS headers,
@@ -27,16 +27,7 @@ from capture import STAGE, capture_once
 BASE_DIR = Path(__file__).resolve().parent
 CFG = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
 
-STATE = {
-    "page_url": CFG["page_url"],
-    "manual_url": None,
-    "url": None,
-    "updated_at": None,
-    "last_error": None,
-    "cycles": 0,
-}
-LOCK = threading.Lock()
-WAKE = threading.Event()
+M3U8_RE = re.compile(r"\.m3u8(?:$|[?#])", re.IGNORECASE)
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -44,6 +35,9 @@ USER_AGENT = (
 )
 CHUNK_BYTES = 64 * 1024
 MAX_PLAYLIST_BYTES = 2 * 1024 * 1024
+
+LOCK = threading.Lock()
+WAKE = threading.Event()
 
 app = Flask(__name__)
 
@@ -84,6 +78,20 @@ def is_allowed_target(value):
 def is_valid_page_url(value):
     parsed = urlparse(value)
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def is_m3u8(value):
+    return bool(M3U8_RE.search(value or ""))
+
+
+# Initial state. If config.json holds a direct .m3u8 link, play it straight away.
+_initial_page = CFG.get("page_url", "")
+if is_m3u8(_initial_page):
+    STATE = {"page_url": "", "manual_url": _initial_page, "url": _initial_page,
+             "updated_at": now_iso(), "last_error": None, "cycles": 0}
+else:
+    STATE = {"page_url": _initial_page, "manual_url": None, "url": None,
+             "updated_at": None, "last_error": None, "cycles": 0}
 
 
 def origin_for(target):
@@ -141,8 +149,7 @@ def capture_loop():
             STATE["cycles"] += 1
             cycle = STATE["cycles"]
 
-        if manual:
-            # Manual .m3u8 mode: no browser capture needed.
+        if manual or not page_url:
             WAKE.wait(CFG["refresh_interval_s"])
             WAKE.clear()
             continue
@@ -151,7 +158,7 @@ def capture_loop():
         try:
             url = capture_once({**CFG, "page_url": page_url})
             with LOCK:
-                # Skip the result if the user changed the target during this cycle.
+                # Discard the result if the user changed the target during this cycle.
                 if STATE["page_url"] != page_url or STATE["manual_url"]:
                     pass
                 elif url:
@@ -160,7 +167,7 @@ def capture_loop():
                         STATE["updated_at"] = now_iso()
                     STATE["last_error"] = None
                 else:
-                    STATE["last_error"] = "No stream request seen within timeout"
+                    STATE["last_error"] = STAGE.get("error") or "No stream found within timeout"
         except Exception as exc:
             log(f"Cycle {cycle} failed:\n{traceback.format_exc()}")
             with LOCK:
@@ -173,27 +180,28 @@ def capture_loop():
 @app.post("/api/target")
 def api_target():
     body = request.get_json(silent=True) or {}
-    page_url = str(body.get("page_url", "")).strip()
-    stream_url = str(body.get("stream_url", "")).strip()
+    value = str(body.get("page_url") or body.get("stream_url") or "").strip()
+    if not value:
+        return jsonify({"error": "Paste a page URL or a .m3u8 link"}), 400
 
-    if stream_url:
-        if not is_allowed_target(stream_url):
+    if is_m3u8(value):
+        if not is_allowed_target(value):
             return jsonify({"error": "Enter a valid public http(s) .m3u8 URL"}), 400
         with LOCK:
-            STATE.update(page_url="", manual_url=stream_url, url=stream_url,
+            STATE.update(page_url="", manual_url=value, url=value,
                          updated_at=now_iso(), last_error=None)
         WAKE.set()
-        log(f"Manual stream set: {stream_url}")
+        log(f"Manual stream set: {value}")
         return jsonify({"ok": True, "mode": "manual"}), 202
 
-    if not is_valid_page_url(page_url):
-        return jsonify({"error": "Enter a full http(s) page URL"}), 400
+    if not is_valid_page_url(value):
+        return jsonify({"error": "Enter a full http(s) page URL or .m3u8 link"}), 400
 
     with LOCK:
-        STATE.update(page_url=page_url, manual_url=None, url=None,
+        STATE.update(page_url=value, manual_url=None, url=None,
                      updated_at=None, last_error=None)
     WAKE.set()
-    log(f"New page target: {page_url}")
+    log(f"New page target: {value}")
     return jsonify({"ok": True, "mode": "capture"}), 202
 
 
@@ -296,4 +304,4 @@ def index():
 threading.Thread(target=capture_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), threaded=True)
