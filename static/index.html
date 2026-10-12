@@ -137,6 +137,9 @@
   const toast = $('toast');
 
   const M3U8 = /\.m3u8(\?|#|$)/i;
+  const LAST_KEY = 'stream:last';
+  const LAST_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // Remember the last stream for 6 hours.
+  const KEEPALIVE_MS = 4 * 60 * 1000;           // Ping the server every 4 minutes while the page is open.
   const PROGRESS = {
     launching_chrome: 10, chrome_started: 25, opening_page: 40,
     page_loaded: 55, waiting_for_stream: 70, stream_found: 95,
@@ -151,11 +154,12 @@
   };
 
   let hls = null;
-  let rawUrl = null;      // The stream as found (fastest path: played directly).
-  let proxyUrl = null;    // Same stream through the server proxy (fallback if CORS blocks direct).
+  let rawUrl = null;      // Stream as found. Played directly first (fastest).
+  let proxyUrl = null;    // Same stream through the server proxy (used if CORS blocks direct).
   let usingProxy = false;
   let netRetries = 0;
   let statusTick = 0;
+  let serverAwake = false;
 
   function toastMsg(text) {
     toast.textContent = text;
@@ -196,6 +200,20 @@
     }
   }
 
+  function saveLast(url, proxy) {
+    try {
+      localStorage.setItem(LAST_KEY, JSON.stringify({ url, proxy, t: Date.now() }));
+    } catch (_) { /* storage blocked; ignore */ }
+  }
+
+  function loadLast() {
+    try {
+      const v = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
+      if (v && v.url && Date.now() - v.t < LAST_MAX_AGE_MS) return v;
+    } catch (_) { /* ignore */ }
+    return null;
+  }
+
   // One hls.js instance, reused across streams (no black flash on switch).
   function createHls() {
     hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 20 });
@@ -206,7 +224,7 @@
       if (!d.fatal) return;
 
       if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        // Direct play failed (usually CORS). Switch to the proxy once.
+        // Direct failed (usually CORS or an expired link). Try the proxy once.
         if (!usingProxy && proxyUrl) {
           usingProxy = true;
           netRetries = 0;
@@ -215,7 +233,10 @@
         }
         netRetries += 1;
         if (netRetries > 5) {
-          showOverlay('Stream unreachable. Waiting for a new capture…', true);
+          // Link is dead (expired). Clear it so the next status check picks up a fresh one.
+          rawUrl = null;
+          netRetries = 0;
+          showOverlay('Reconnecting to a fresh stream…');
           return;
         }
         hls.startLoad();
@@ -235,15 +256,32 @@
       netRetries = 0;
       hls.loadSource(directUrl);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Native HLS (iOS Safari) uses the proxy, since it cannot fall back on its own.
-      video.src = proxyUrl || directUrl;
+      video.src = proxyUrl || directUrl; // Native HLS (iOS Safari) uses the proxy.
       video.play().catch(() => {});
     } else {
       showOverlay('This browser cannot play HLS.', true);
     }
   }
 
-  // Runs every 2s. Attaches the stream as soon as the server has one, including on page open.
+  function playStream(url, proxy) {
+    rawUrl = url;
+    proxyUrl = proxy;
+    hideOverlay();
+    setPill('ok', 'Live');
+    attach(url);
+    saveLast(url, proxy);
+  }
+
+  // Keeps the Render server awake while the page is open.
+  async function keepAlive() {
+    try {
+      await fetch('/api/status?ka=' + Date.now(), { cache: 'no-store' });
+      serverAwake = true;
+    } catch (_) {
+      serverAwake = false;
+    }
+  }
+
   async function checkStream() {
     try {
       const res = await fetch('/api/stream?t=' + Date.now(), { cache: 'no-store' });
@@ -254,13 +292,7 @@
         age.textContent = 'updated ' + ago(data.updated_at);
         age.style.display = 'inline-block';
       }
-      if (data.url && data.url !== rawUrl) {
-        rawUrl = data.url;
-        proxyUrl = data.proxy_url;
-        hideOverlay();
-        setPill('ok', 'Live');
-        attach(rawUrl);
-      }
+      if (data.url && data.url !== rawUrl) playStream(data.url, data.proxy_url);
     } catch (_) { /* server waking up; next tick retries */ }
   }
 
@@ -268,6 +300,7 @@
     try {
       const res = await fetch('/api/status?t=' + Date.now(), { cache: 'no-store' });
       const s = await res.json();
+      serverAwake = true;
       const name = (s.stage && s.stage.name) || 'idle';
 
       if (rawUrl) return; // Already playing; the stream check handles updates.
@@ -288,8 +321,9 @@
         showOverlay('Paste a page or .m3u8 link below.');
       }
     } catch (_) {
-      setPill('err', 'Offline');
-      showOverlay('Server unreachable. Retrying…', true);
+      serverAwake = false;
+      setPill('warn', 'Waking server');
+      showOverlay('Waking the server (free plan, about 30–60 s)…');
     }
   }
 
@@ -336,9 +370,27 @@
     }
   });
 
-  // Start immediately, then keep going.
+  // When the phone wakes or the tab comes back, refresh right away.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      keepAlive();
+      checkStream();
+      checkStatus();
+    }
+  });
+
+  // 1. Play the last known stream instantly, while the server is still waking up.
+  const last = loadLast();
+  if (last) {
+    playStream(last.url, last.proxy);
+    setPill('ok', 'Last stream');
+  }
+
+  // 2. Then sync with the server.
+  keepAlive();
   checkStream();
   checkStatus();
+  setInterval(keepAlive, KEEPALIVE_MS);
   setInterval(() => {
     checkStream();
     statusTick += 2;
