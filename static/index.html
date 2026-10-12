@@ -2,179 +2,351 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stream Capture Player</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0d14">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<title>Stream</title>
 <style>
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-body {
-margin: 0;
-padding: 16px;
-background: #0b0b0f;
-color: #e8e8ee;
-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
-.wrap { max-width: 960px; margin: 0 auto; }
-h1 { font-size: 1.3rem; margin: 0 0 12px; }
-h2 { font-size: 1rem; margin: 16px 0 6px; color: #9a9aa8; font-weight: 500; }
-form { display: flex; gap: 8px; margin-bottom: 8px; }
-input {
-flex: 1;
-min-width: 0;
-padding: 12px;
-border-radius: 8px;
-border: 1px solid #333;
-background: #1b1b1b;
-color: #eee;
-font-size: 15px;
-}
-button {
-padding: 12px 18px;
-border: 0;
-border-radius: 8px;
-background: #3b82f6;
-color: #fff;
-font-size: 15px;
-cursor: pointer;
-}
-video {
-width: 100%;
-aspect-ratio: 16 / 9;
-background: #000;
-border-radius: 8px;
-margin-top: 12px;
-}
-#msg, #status {
-margin-top: 10px;
-font-size: 14px;
-color: #9a9aa8;
-min-height: 1.2em;
-word-break: break-all;
-}
-#msg.error, #status.error { color: #ff6b6b; }
-#msg.ok, #status.ok { color: #6bd98a; }
+  :root {
+    --bg: #0a0d14; --panel: #121826; --line: #1f2a40; --text: #e9eef8; --mute: #8592b0;
+    --accent: #7c9cff; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; max-width: 1100px; width: 100%; margin: 0 auto;
+  }
+  .brand { font-weight: 700; letter-spacing: .02em; }
+  .pill {
+    font-size: 12px; padding: 5px 11px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--mute);
+  }
+  .pill.ok { color: var(--ok); border-color: #1d4d3e; }
+  .pill.warn { color: var(--warn); border-color: #4d3f1d; }
+  .pill.err { color: var(--err); border-color: #4d2222; }
+  main { width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 12px; }
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
+    border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
+  }
+  video { width: 100%; height: 100%; display: block; background: #000; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
+    background: radial-gradient(circle at 50% 40%, #16203a, #000 75%);
+  }
+  .overlay.hide { display: none; }
+  .spinner {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid #26324f; border-top-color: var(--accent);
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .msg { max-width: 460px; font-size: 14px; color: var(--mute); word-break: break-word; }
+  .msg.err { color: var(--err); }
+  .bar { height: 3px; margin-top: 12px; background: #1a2338; border-radius: 3px; overflow: hidden; }
+  .bar i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent), #b08cff); transition: width .5s ease;
+  }
+  .dock {
+    margin-top: auto; padding: 14px 12px 18px;
+    background: linear-gradient(180deg, transparent, var(--bg) 35%);
+  }
+  form { display: flex; gap: 8px; max-width: 1100px; margin: 0 auto; }
+  input {
+    flex: 1; min-width: 0; padding: 14px 16px; border-radius: 14px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font-size: 16px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    padding: 0 22px; border: 0; border-radius: 14px; cursor: pointer;
+    background: var(--accent); color: #06101f; font-weight: 700; font-size: 15px;
+  }
+  button:disabled { opacity: .5; }
+  .tools {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 10px auto 0; max-width: 1100px; min-height: 30px;
+  }
+  .ghost {
+    background: transparent; border: 1px solid var(--line); color: var(--mute);
+    font-weight: 500; font-size: 13px; padding: 8px 12px; border-radius: 10px;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%);
+    background: #1a2540; border: 1px solid var(--line); padding: 9px 14px; border-radius: 10px;
+    font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; }
 </style>
 </head>
 <body>
-<div class="wrap">
-<h1>Stream Capture Player</h1>
+  <header>
+    <div class="brand">Stream</div>
+    <span id="pill" class="pill">Connecting</span>
+  </header>
 
-<h2>Option 1: page URL (auto-capture)</h2>
-<form id="pageForm">
-<input id="pageUrl" type="url" placeholder="Paste the page URL here">
-<button type="submit">Capture</button>
-</form>
+  <main>
+    <div class="stage">
+      <video id="v" controls autoplay muted playsinline></video>
+      <div id="overlay" class="overlay">
+        <div id="spin" class="spinner"></div>
+        <div id="msg" class="msg">Connecting…</div>
+      </div>
+    </div>
+    <div class="bar"><i id="progress"></i></div>
+  </main>
 
-<h2>Option 2: direct .m3u8 URL</h2>
-<form id="streamForm">
-<input id="streamUrl" type="url" placeholder="Paste the .m3u8 link here">
-<button type="submit">Play</button>
-</form>
+  <div class="dock">
+    <form id="form" autocomplete="off">
+      <input id="src" type="text" inputmode="url" placeholder="Page URL or .m3u8 link" required>
+      <button id="go" type="submit">Go</button>
+    </form>
+    <div class="tools">
+      <button id="copy" class="ghost" type="button">Copy stream link</button>
+      <span id="age" class="pill" style="display:none"></span>
+    </div>
+  </div>
 
-<div id="msg"></div>
-<video id="player" controls autoplay muted playsinline></video>
-<div id="status">Waiting for a stream…</div>
-</div>
+  <div id="toast" class="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script>
 (() => {
-'use strict';
+  'use strict';
 
-const POLL_MS = 5000;
-const video = document.getElementById('player');
-const pageForm = document.getElementById('pageForm');
-const streamForm = document.getElementById('streamForm');
-const pageInput = document.getElementById('pageUrl');
-const streamInput = document.getElementById('streamUrl');
-const msgEl = document.getElementById('msg');
-const statusEl = document.getElementById('status');
+  const $ = (id) => document.getElementById(id);
+  const video = $('v');
+  const overlay = $('overlay');
+  const msg = $('msg');
+  const spin = $('spin');
+  const pill = $('pill');
+  const bar = $('progress');
+  const form = $('form');
+  const src = $('src');
+  const go = $('go');
+  const copyBtn = $('copy');
+  const age = $('age');
+  const toast = $('toast');
 
-let hls = null;
-let currentStream = null;
+  const M3U8 = /\.m3u8(\?|#|$)/i;
+  const PROGRESS = {
+    launching_chrome: 10, chrome_started: 25, opening_page: 40,
+    page_loaded: 55, waiting_for_stream: 70, stream_found: 95,
+  };
+  const LABELS = {
+    launching_chrome: 'Starting browser…',
+    chrome_started: 'Browser ready',
+    opening_page: 'Opening page…',
+    page_loaded: 'Page loaded, looking for the stream…',
+    waiting_for_stream: 'Waiting for the stream…',
+    stream_found: 'Stream found, loading…',
+  };
 
-function setText(el, text, kind = '') {
-el.textContent = text;
-el.className = kind;
-}
+  let hls = null;
+  let rawUrl = null;      // The stream as found (fastest path: played directly).
+  let proxyUrl = null;    // Same stream through the server proxy (fallback if CORS blocks direct).
+  let usingProxy = false;
+  let netRetries = 0;
+  let statusTick = 0;
 
-function playStream(proxyUrl) {
-if (hls) { hls.destroy(); hls = null; }
-if (window.Hls && Hls.isSupported()) {
-hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
-hls.loadSource(proxyUrl);
-hls.attachMedia(video);
-hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-hls.on(Hls.Events.ERROR, (_e, data) => {
-if (data.fatal) setText(statusEl, Player error: ${data.type} / ${data.details}, 'error');
-});
-} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-video.src = proxyUrl; // Native HLS (iOS Safari).
-video.play().catch(() => {});
-} else {
-setText(statusEl, 'This browser cannot play HLS.', 'error');
-}
-}
+  function toastMsg(text) {
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(toastMsg.t);
+    toastMsg.t = setTimeout(() => toast.classList.remove('show'), 1600);
+  }
 
-async function pollStream() {
-try {
-const res = await fetch(/api/stream?t=${Date.now()}`, { cache: 'no-store' });
-if (res.status === 404) return;
-const data = await res.json();
-if (data.url && data.url !== currentStream) {
-currentStream = data.url;
-setText(statusEl, 'Stream found, playing…', 'ok');
-playStream(data.proxy_url);
-}
-} catch (_) {
-setText(statusEl, 'Server unreachable, retrying…', 'error');
-}
-}
+  function setPill(kind, text) {
+    pill.className = 'pill ' + kind;
+    pill.textContent = text;
+  }
 
-async function pollStatus() {
-if (currentStream) return;
-try {
-const res = await fetch(/api/status?t=${Date.now()}, { cache: 'no-store' }); const data = await res.json(); const err = data.last_error ? —  {data.stage.name})${err});
-} catch (_) { /* ignore */ }
-}
+  function showOverlay(text, isError = false) {
+    overlay.classList.remove('hide');
+    msg.textContent = text;
+    msg.className = 'msg' + (isError ? ' err' : '');
+    spin.style.display = isError ? 'none' : 'block';
+  }
 
-async function send(body) {
-setText(msgEl, 'Sending…');
-const res = await fetch('/api/target', {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify(body),
-});
-const data = await res.json();
-if (!res.ok) throw new Error(data.error || HTTP${res.status}`);
-currentStream = null;
-return data;
-}
+  function hideOverlay() {
+    overlay.classList.add('hide');
+  }
 
-pageForm.addEventListener('submit', async (event) => {
-event.preventDefault();
-try {
-await send({ page_url: pageInput.value.trim() });
-setText(msgEl, 'Capture started. This takes about a minute.', 'ok');
-} catch (err) {
-setText(msgEl, Failed: ${err.message}`, 'error');
-}
-});
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+    if (s < 60) return `${Math.floor(s)}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+  }
 
-streamForm.addEventListener('submit', async (event) => {
-event.preventDefault();
-try {
-await send({ stream_url: streamInput.value.trim() });
-setText(msgEl, 'Stream set.', 'ok');
-} catch (err) {
-setText(msgEl, Failed:${err.message}`, 'error');
-}
-});
+  function explain(text) {
+    try {
+      const d = JSON.parse(text);
+      return d.diagnosis || text;
+    } catch (_) {
+      return text || 'No stream found.';
+    }
+  }
 
-pollStream();
-pollStatus();
-setInterval(pollStream, POLL_MS);
-setInterval(pollStatus, POLL_MS);
+  // One hls.js instance, reused across streams (no black flash on switch).
+  function createHls() {
+    hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 20 });
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    hls.on(Hls.Events.FRAG_LOADED, () => { netRetries = 0; });
+    hls.on(Hls.Events.ERROR, (_e, d) => {
+      if (!d.fatal) return;
+
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // Direct play failed (usually CORS). Switch to the proxy once.
+        if (!usingProxy && proxyUrl) {
+          usingProxy = true;
+          netRetries = 0;
+          hls.loadSource(proxyUrl);
+          return;
+        }
+        netRetries += 1;
+        if (netRetries > 5) {
+          showOverlay('Stream unreachable. Waiting for a new capture…', true);
+          return;
+        }
+        hls.startLoad();
+      } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError();
+      } else {
+        showOverlay('Player error: ' + d.details, true);
+      }
+    });
+  }
+
+  // Direct first (fastest). Proxy is used only if the browser blocks the direct URL.
+  function attach(directUrl) {
+    if (window.Hls && Hls.isSupported()) {
+      if (!hls) createHls();
+      usingProxy = false;
+      netRetries = 0;
+      hls.loadSource(directUrl);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS (iOS Safari) uses the proxy, since it cannot fall back on its own.
+      video.src = proxyUrl || directUrl;
+      video.play().catch(() => {});
+    } else {
+      showOverlay('This browser cannot play HLS.', true);
+    }
+  }
+
+  // Runs every 2s. Attaches the stream as soon as the server has one, including on page open.
+  async function checkStream() {
+    try {
+      const res = await fetch('/api/stream?t=' + Date.now(), { cache: 'no-store' });
+      if (res.status === 404) return;
+      const data = await res.json();
+
+      if (data.updated_at) {
+        age.textContent = 'updated ' + ago(data.updated_at);
+        age.style.display = 'inline-block';
+      }
+      if (data.url && data.url !== rawUrl) {
+        rawUrl = data.url;
+        proxyUrl = data.proxy_url;
+        hideOverlay();
+        setPill('ok', 'Live');
+        attach(rawUrl);
+      }
+    } catch (_) { /* server waking up; next tick retries */ }
+  }
+
+  async function checkStatus() {
+    try {
+      const res = await fetch('/api/status?t=' + Date.now(), { cache: 'no-store' });
+      const s = await res.json();
+      const name = (s.stage && s.stage.name) || 'idle';
+
+      if (rawUrl) return; // Already playing; the stream check handles updates.
+
+      if (LABELS[name]) {
+        setPill('warn', 'Capturing');
+        bar.style.width = PROGRESS[name] + '%';
+        showOverlay(LABELS[name]);
+      } else if (name === 'timeout_no_stream') {
+        setPill('err', 'No stream');
+        bar.style.width = '0%';
+        showOverlay(explain(s.stage.error), true);
+      } else if (s.page_url) {
+        setPill('', 'Idle');
+        showOverlay(s.last_error ? explain(s.last_error) : 'Waiting for the next capture…');
+      } else {
+        setPill('', 'Ready');
+        showOverlay('Paste a page or .m3u8 link below.');
+      }
+    } catch (_) {
+      setPill('err', 'Offline');
+      showOverlay('Server unreachable. Retrying…', true);
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = src.value.trim();
+    if (!value) return;
+
+    const isStream = M3U8.test(value);
+    const body = isStream ? { stream_url: value } : { page_url: value };
+
+    go.disabled = true;
+    try {
+      const res = await fetch('/api/target', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      rawUrl = null;
+      proxyUrl = null;
+      src.value = '';
+      bar.style.width = '5%';
+      setPill('warn', isStream ? 'Loading' : 'Capturing');
+      showOverlay(isStream ? 'Loading stream…' : 'Starting capture…');
+      toastMsg(isStream ? 'Stream set' : 'Capture started');
+      checkStream();
+    } catch (err) {
+      toastMsg('Failed: ' + err.message);
+    } finally {
+      go.disabled = false;
+    }
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    if (!proxyUrl) return toastMsg('No stream yet');
+    try {
+      await navigator.clipboard.writeText(location.origin + proxyUrl);
+      toastMsg('Stream link copied');
+    } catch (_) {
+      toastMsg('Copy failed');
+    }
+  });
+
+  // Start immediately, then keep going.
+  checkStream();
+  checkStatus();
+  setInterval(() => {
+    checkStream();
+    statusTick += 2;
+    if (!rawUrl || statusTick >= 15) {
+      statusTick = 0;
+      checkStatus();
+    }
+  }, 2000);
 })();
 </script>
 </body>
