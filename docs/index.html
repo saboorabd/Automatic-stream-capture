@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0d14">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://automatic-stream-capture.onrender.com" crossorigin>
+<title>Stream</title>
+<style>
+  :root {
+    --bg: #0a0d14; --panel: #121826; --line: #1f2a40; --text: #e9eef8; --mute: #8592b0;
+    --accent: #7c9cff; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; max-width: 1100px; width: 100%; margin: 0 auto;
+  }
+  .brand { font-weight: 700; letter-spacing: .02em; }
+  .pill {
+    font-size: 12px; padding: 5px 11px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--mute);
+  }
+  .pill.ok { color: var(--ok); border-color: #1d4d3e; }
+  .pill.warn { color: var(--warn); border-color: #4d3f1d; }
+  .pill.err { color: var(--err); border-color: #4d2222; }
+  main { width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 12px; }
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
+    border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
+  }
+  video { width: 100%; height: 100%; display: block; background: #000; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
+    background: radial-gradient(circle at 50% 40%, #16203a, #000 75%);
+  }
+  .overlay.hide { display: none; }
+  .spinner {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid #26324f; border-top-color: var(--accent);
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .msg { max-width: 460px; font-size: 14px; color: var(--mute); word-break: break-word; }
+  .msg.err { color: var(--err); }
+  .bar { height: 3px; margin-top: 12px; background: #1a2338; border-radius: 3px; overflow: hidden; }
+  .bar i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent), #b08cff); transition: width .5s ease;
+  }
+  .dock {
+    margin-top: auto; padding: 14px 12px 18px;
+    background: linear-gradient(180deg, transparent, var(--bg) 35%);
+  }
+  form { display: flex; gap: 8px; max-width: 1100px; margin: 0 auto; }
+  input {
+    flex: 1; min-width: 0; padding: 14px 16px; border-radius: 14px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font-size: 16px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    padding: 0 22px; border: 0; border-radius: 14px; cursor: pointer;
+    background: var(--accent); color: #06101f; font-weight: 700; font-size: 15px;
+  }
+  button:disabled { opacity: .5; }
+  .tools {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 10px auto 0; max-width: 1100px; min-height: 30px;
+  }
+  .ghost {
+    background: transparent; border: 1px solid var(--line); color: var(--mute);
+    font-weight: 500; font-size: 13px; padding: 8px 12px; border-radius: 10px;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%);
+    background: #1a2540; border: 1px solid var(--line); padding: 9px 14px; border-radius: 10px;
+    font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">Stream</div>
+    <span id="pill" class="pill">Connecting</span>
+  </header>
+
+  <main>
+    <div class="stage">
+      <video id="v" controls autoplay muted playsinline></video>
+      <div id="overlay" class="overlay">
+        <div id="spin" class="spinner"></div>
+        <div id="msg" class="msg">Connecting…</div>
+      </div>
+    </div>
+    <div class="bar"><i id="progress"></i></div>
+  </main>
+
+  <div class="dock">
+    <form id="form" autocomplete="off">
+      <input id="src" type="text" inputmode="url" placeholder="Page URL or .m3u8 link" required>
+      <button id="go" type="submit">Go</button>
+    </form>
+    <div class="tools">
+      <button id="copy" class="ghost" type="button">Copy stream link</button>
+      <span id="age" class="pill" style="display:none"></span>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  // Server address. On GitHub Pages it points to Render; on Render it stays same-origin.
+  const API = location.hostname.endsWith('github.io')
+    ? 'https://automatic-stream-capture.onrender.com'
+    : '';
+
+  const $ = (id) => document.getElementById(id);
+  const video = $('v');
+  const overlay = $('overlay');
+  const msg = $('msg');
+  const spin = $('spin');
+  const pill = $('pill');
+  const bar = $('progress');
+  const form = $('form');
+  const src = $('src');
+  const go = $('go');
+  const copyBtn = $('copy');
+  const age = $('age');
+  const toast = $('toast');
+
+  const M3U8 = /\.m3u8(\?|#|$)/i;
+  const LAST_KEY = 'stream:last';
+  const LAST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  const KEEPALIVE_MS = 4 * 60 * 1000;
+  const PROGRESS = {
+    launching_chrome: 10, chrome_started: 25, opening_page: 40,
+    page_loaded: 55, waiting_for_stream: 70, stream_found: 95,
+  };
+  const LABELS = {
+    launching_chrome: 'Starting browser…',
+    chrome_started: 'Browser ready',
+    opening_page: 'Opening page…',
+    page_loaded: 'Page loaded, looking for the stream…',
+    waiting_for_stream: 'Waiting for the stream…',
+    stream_found: 'Stream found, loading…',
+  };
+
+  let hls = null;
+  let rawUrl = null;
+  let proxyUrl = null;
+  let usingProxy = false;
+  let netRetries = 0;
+  let statusTick = 0;
+
+  function toastMsg(text) {
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(toastMsg.t);
+    toastMsg.t = setTimeout(() => toast.classList.remove('show'), 1600);
+  }
+
+  function setPill(kind, text) {
+    pill.className = 'pill ' + kind;
+    pill.textContent = text;
+  }
+
+  function showOverlay(text, isError = false) {
+    overlay.classList.remove('hide');
+    msg.textContent = text;
+    msg.className = 'msg' + (isError ? ' err' : '');
+    spin.style.display = isError ? 'none' : 'block';
+  }
+
+  function hideOverlay() {
+    overlay.classList.add('hide');
+  }
+
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+    if (s < 60) return `${Math.floor(s)}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+  }
+
+  function explain(text) {
+    try {
+      const d = JSON.parse(text);
+      return d.diagnosis || text;
+    } catch (_) {
+      return text || 'No stream found.';
+    }
+  }
+
+  function saveLast(url, proxy) {
+    try {
+      localStorage.setItem(LAST_KEY, JSON.stringify({ url, proxy, t: Date.now() }));
+    } catch (_) { /* storage blocked */ }
+  }
+
+  function loadLast() {
+    try {
+      const v = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
+      if (v && v.url && Date.now() - v.t < LAST_MAX_AGE_MS) return v;
+    } catch (_) { /* ignore */ }
+    return null;
+  }
+
+  function createHls() {
+    hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 20 });
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    hls.on(Hls.Events.FRAG_LOADED, () => { netRetries = 0; });
+    hls.on(Hls.Events.ERROR, (_e, d) => {
+      if (!d.fatal) return;
+
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // Direct play failed (CORS or expired link). Try the proxy once.
+        if (!usingProxy && proxyUrl) {
+          usingProxy = true;
+          netRetries = 0;
+          hls.loadSource(proxyUrl);
+          return;
+        }
+        netRetries += 1;
+        if (netRetries > 5) {
+          rawUrl = null; // Link is dead. The next check picks up a fresh one.
+          netRetries = 0;
+          showOverlay('Reconnecting to a fresh stream…');
+          return;
+        }
+        hls.startLoad();
+      } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError();
+      } else {
+        showOverlay('Player error: ' + d.details, true);
+      }
+    });
+  }
+
+  // Direct first (fastest). Proxy only if the browser blocks the direct URL.
+  function attach(directUrl) {
+    if (window.Hls && Hls.isSupported()) {
+      if (!hls) createHls();
+      usingProxy = false;
+      netRetries = 0;
+      hls.loadSource(directUrl);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = proxyUrl || directUrl; // Native HLS (iOS Safari) uses the proxy.
+      video.play().catch(() => {});
+    } else {
+      showOverlay('This browser cannot play HLS.', true);
+    }
+  }
+
+  function playStream(url, proxy) {
+    rawUrl = url;
+    // proxy may be relative ("/proxy?...") from the server or absolute when restored from cache.
+    proxyUrl = proxy && !proxy.startsWith('http') ? API + proxy : proxy;
+    hideOverlay();
+    setPill('ok', 'Live');
+    attach(url);
+    saveLast(url, proxyUrl);
+  }
+
+  async function keepAlive() {
+    try {
+      await fetch(API + '/api/status?ka=' + Date.now(), { cache: 'no-store' });
+    } catch (_) { /* offline or server asleep */ }
+  }
+
+  async function checkStream() {
+    try {
+      const res = await fetch(API + '/api/stream?t=' + Date.now(), { cache: 'no-store' });
+      if (res.status === 404) return;
+      const data = await res.json();
+
+      if (data.updated_at) {
+        age.textContent = 'updated ' + ago(data.updated_at);
+        age.style.display = 'inline-block';
+      }
+      if (data.url && data.url !== rawUrl) playStream(data.url, data.proxy_url);
+    } catch (_) { /* server waking up; next tick retries */ }
+  }
+
+  async function checkStatus() {
+    try {
+      const res = await fetch(API + '/api/status?t=' + Date.now(), { cache: 'no-store' });
+      const s = await res.json();
+      const name = (s.stage && s.stage.name) || 'idle';
+
+      if (rawUrl) return;
+
+      if (LABELS[name]) {
+        setPill('warn', 'Capturing');
+        bar.style.width = PROGRESS[name] + '%';
+        showOverlay(LABELS[name]);
+      } else if (name === 'timeout_no_stream') {
+        setPill('err', 'No stream');
+        bar.style.width = '0%';
+        showOverlay(explain(s.stage.error), true);
+      } else if (s.page_url) {
+        setPill('', 'Idle');
+        showOverlay(s.last_error ? explain(s.last_error) : 'Waiting for the next capture…');
+      } else {
+        setPill('', 'Ready');
+        showOverlay('Paste a page or .m3u8 link below.');
+      }
+    } catch (_) {
+      if (!rawUrl) {
+        setPill('warn', 'Waking server');
+        showOverlay('Server is waking up (free plan, can take a minute)…');
+      }
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = src.value.trim();
+    if (!value) return;
+
+    const isStream = M3U8.test(value);
+    const body = isStream ? { stream_url: value } : { page_url: value };
+
+    go.disabled = true;
+    try {
+      const res = await fetch(API + '/api/target', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      rawUrl = null;
+      proxyUrl = null;
+      src.value = '';
+      bar.style.width = '5%';
+      setPill('warn', isStream ? 'Loading' : 'Capturing');
+      showOverlay(isStream ? 'Loading stream…' : 'Starting capture…');
+      toastMsg(isStream ? 'Stream set' : 'Capture started');
+      checkStream();
+    } catch (err) {
+      toastMsg('Failed: ' + err.message);
+    } finally {
+      go.disabled = false;
+    }
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    if (!proxyUrl) return toastMsg('No stream yet');
+    try {
+      await navigator.clipboard.writeText(proxyUrl);
+      toastMsg('Stream link copied');
+    } catch (_) {
+      toastMsg('Copy failed');
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      keepAlive();
+      checkStream();
+      checkStatus();
+    }
+  });
+
+  // 1. Play the last known stream immediately, from cache, before the server answers.
+  const last = loadLast();
+  if (last) {
+    playStream(last.url, last.proxy);
+    setPill('ok', 'Last stream');
+  }
+
+  // 2. Then sync with the server in the background.
+  keepAlive();
+  checkStream();
+  checkStatus();
+  setInterval(keepAlive, KEEPALIVE_MS);
+  setInterval(() => {
+    checkStream();
+    statusTick += 2;
+    if (!rawUrl || statusTick >= 15) {
+      statusTick = 0;
+      checkStatus();
+    }
+  }, 2000);
+})();
+</script>
+</body>
+</html>
