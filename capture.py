@@ -1,11 +1,19 @@
 """
-Warm-browser capture. Four sources, checked every second, in priority order:
-  1. Video Link Extractor Pro : its getLinks message (verified at startup).
-  2. Stream Detector / M3U8 Sniffer : links shown in their popup, when they show any.
-  3. Network sniffing : every request the browser makes, in every frame.
-  4. Page source scan : m3u8 URLs written inside the HTML/JS/JSON of every frame.
-The first source with a match wins, and its newest match is returned.
-Works even if no extension loads, because sources 3 and 4 need none.
+Warm-browser capture.
+
+The browser stays open and keeps the page playing, so the player keeps requesting
+its playlist. The newest .m3u8 request is always the current link, so the page
+is NOT reloaded every cycle. It is reloaded only when needed:
+  - first run, or the target page changed
+  - a viewer reported a dead link (request_reload)
+  - it has been loaded for reload_after_s (signed links expire)
+  - no stream was seen for a whole capture_timeout_s
+
+Sources, priority order (first match wins, newest match is returned):
+  1. Video Link Extractor Pro (getLinks)
+  2. Network requests from every frame (checked every second)
+  3. Store extension popups (every SLOW_SCAN_S seconds)
+  4. Page source scan (every SLOW_SCAN_S seconds)
 """
 
 import hashlib
@@ -14,12 +22,12 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
-from display import ensure_display
 
 STAGE = {"name": "idle", "since": None, "error": None}
 
@@ -27,12 +35,11 @@ EXTENSIONS_ROOT = Path(os.environ.get("EXTENSIONS_ROOT", "/opt/extensions"))
 VLE_NAME = "Video Link Extractor Pro"
 PROXY_URL = os.environ.get("PROXY_URL", "").strip()
 SEEN_CAP = 500
-SCAN_EVERY = 3  # Heavy scans (page source, store popups) run every 3rd loop.
+POLL_S = 1.0
+SLOW_SCAN_S = 10.0
 
+REFRESH = threading.Event()
 M3U8_RE = re.compile(r'https?:[^\s"\'<>]*?\.m3u8[^\s"\'<>]*', re.IGNORECASE)
-
-_session = {"pw": None, "context": None, "page": None, "vle_popup": None,
-            "scan_tab": None, "profile": None, "exts": [], "vle_ready": False, "seen": None}
 
 PLAY_VIDEO_JS = """
 () => {
@@ -78,10 +85,27 @@ IS_EXTENSION_PAGE_JS = """
 """
 
 
+def request_reload():
+    """Called when a viewer reports a dead link. The next cycle reloads the page."""
+    REFRESH.set()
+
+
 def set_stage(name):
     STAGE["name"] = name
     STAGE["since"] = datetime.now().isoformat(timespec="seconds")
     print(f"[{datetime.now():%H:%M:%S}] [capture] {name}", flush=True)
+
+
+def _empty_session():
+    return {
+        "pw": None, "context": None, "page": None, "vle_popup": None, "scan_tab": None,
+        "profile": None, "exts": [], "vle_ready": False, "seen": [],
+        "loaded_url": None, "loaded_at": 0.0, "clicked": False,
+        "store_hits": [], "source_hits": [], "last_slow": 0.0, "last_found": None,
+    }
+
+
+_session = _empty_session()
 
 
 def ext_id_for_path(path):
@@ -155,7 +179,7 @@ def scan_store_popups(scan_tab, exts):
             continue
         try:
             scan_tab.goto(f"chrome-extension://{ext['id']}/{ext['popup']}",
-                          wait_until="domcontentloaded", timeout=8_000)
+                          wait_until="domcontentloaded", timeout=4_000)
             text = scan_tab.evaluate(
                 "() => document.documentElement.innerHTML + ' ' + document.body.innerText"
             )
@@ -177,7 +201,6 @@ def scan_page_sources(page):
 
 
 def open_session():
-    ensure_display()
     exts = discover_extensions()
     profile = tempfile.mkdtemp(prefix="vle-")
     pw = sync_playwright().start()
@@ -252,15 +275,15 @@ def close_session():
         pass
     if _session["profile"]:
         shutil.rmtree(_session["profile"], ignore_errors=True)
-    for key in _session:
-        _session[key] = [] if key == "exts" else (False if key == "vle_ready" else None)
+    _session.clear()
+    _session.update(_empty_session())
 
 
 def click_play(page, selectors):
     for frame in page.frames:
         for selector in selectors:
             try:
-                frame.click(selector, timeout=1000)
+                frame.click(selector, timeout=800)
                 print(f"[capture] clicked '{selector}'", flush=True)
                 return True
             except Exception:
@@ -276,6 +299,48 @@ def start_video(page):
             pass
 
 
+def needs_load(cfg):
+    if _session["loaded_url"] != cfg["page_url"]:
+        return True
+    if REFRESH.is_set():
+        return True
+    if time.monotonic() - _session["loaded_at"] > cfg.get("reload_after_s", 300):
+        return True
+    return False
+
+
+def load_page(cfg):
+    REFRESH.clear()
+    if _session["vle_ready"]:
+        safe_eval(_session["vle_popup"], CLEAR_LINKS_JS)
+    _session["seen"].clear()
+    _session["store_hits"] = []
+    _session["source_hits"] = []
+    _session["clicked"] = False
+    _session["loaded_url"] = None
+
+    set_stage("opening_page")
+    try:
+        _session["page"].goto(cfg["page_url"], wait_until="domcontentloaded", timeout=60_000)
+    except Exception as exc:
+        STAGE["error"] = f"page load: {type(exc).__name__}: {exc}"
+        print(f"[capture] page load warning: {exc}", flush=True)
+
+    _session["loaded_url"] = cfg["page_url"]
+    _session["loaded_at"] = time.monotonic()
+    set_stage("page_loaded")
+    set_stage("waiting_for_stream")
+
+
+def pick(pattern, *groups):
+    """Returns the newest match from the first group that has one."""
+    for group in groups:
+        matches = [u for u in group if pattern.search(u)]
+        if matches:
+            return matches[-1]
+    return None
+
+
 def capture_once(cfg):
     pattern = re.compile(cfg["stream_pattern"], re.IGNORECASE)
     STAGE["error"] = None
@@ -285,55 +350,39 @@ def capture_once(cfg):
             set_stage("launching_chrome")
             open_session()
 
+        if needs_load(cfg):
+            load_page(cfg)
+
         page = _session["page"]
-        vle_popup = _session["vle_popup"]
-        scan_tab = _session["scan_tab"]
-        exts = _session["exts"]
-        vle_ready = _session["vle_ready"]
-
-        if vle_ready:
-            safe_eval(vle_popup, CLEAR_LINKS_JS)
-        _session["seen"].clear()
-
-        set_stage("opening_page")
-        try:
-            page.goto(cfg["page_url"], wait_until="domcontentloaded", timeout=60_000)
-        except Exception as exc:
-            STAGE["error"] = f"page load: {type(exc).__name__}: {exc}"
-            print(f"[capture] page load warning: {exc}", flush=True)
-        set_stage("page_loaded")
-
-        set_stage("waiting_for_stream")
         deadline = time.monotonic() + cfg["capture_timeout_s"]
-        clicked = False
-        loop_no = 0
-        store_hits, source_hits = [], []
-        vle_hits = []
 
-        while time.monotonic() < deadline:
-            if not clicked:
-                clicked = click_play(page, cfg.get("play_selectors", []))
+        while True:
+            if not _session["clicked"]:
+                _session["clicked"] = click_play(page, cfg.get("play_selectors", []))
             start_video(page)
 
-            loop_no += 1
-            if loop_no % SCAN_EVERY == 1:
-                source_hits = scan_page_sources(page)
-                store_hits = scan_store_popups(scan_tab, exts)
+            vle_hits = collect_vle(_session["vle_popup"]) if _session["vle_ready"] else []
+            found = pick(pattern, vle_hits, list(_session["seen"]))
 
-            vle_hits = collect_vle(vle_popup) if vle_ready else []
-            network_hits = list(_session["seen"])
+            if not found and time.monotonic() - _session["last_slow"] >= SLOW_SCAN_S:
+                _session["last_slow"] = time.monotonic()
+                _session["store_hits"] = scan_store_popups(_session["scan_tab"], _session["exts"])
+                _session["source_hits"] = scan_page_sources(page)
+                found = pick(pattern, _session["store_hits"], _session["source_hits"])
 
-            # Priority order: first source with a match wins.
-            for group in (vle_hits, store_hits, network_hits, source_hits):
-                matches = [u for u in group if pattern.search(u)]
-                if matches:
-                    stream = matches[-1]
-                    print(f"[capture] Found stream: {stream}", flush=True)
-                    set_stage("stream_found")
-                    return stream
+            if found:
+                if found != _session["last_found"]:
+                    print(f"[capture] Found stream: {found}", flush=True)
+                    _session["last_found"] = found
+                set_stage("stream_found")
+                return found
 
-            page.wait_for_timeout(1000)
+            if time.monotonic() >= deadline:
+                break
+            page.wait_for_timeout(int(POLL_S * 1000))
 
+        # Nothing found: reload the page on the next cycle.
+        _session["loaded_url"] = None
         try:
             title = page.title()
         except Exception:
@@ -342,13 +391,12 @@ def capture_once(cfg):
             "diagnosis": "No matching stream from any source. Check play_selectors or page_url.",
             "page_title": title,
             "frames": len(page.frames),
-            "clicked_play": clicked,
-            "vle_ready": vle_ready,
-            "vle_links": len(vle_hits),
+            "clicked_play": _session["clicked"],
+            "vle_ready": _session["vle_ready"],
             "network_m3u8_seen": len(_session["seen"]),
-            "page_source_m3u8": len(source_hits),
-            "store_popup_m3u8": len(store_hits),
-            "extensions_loaded": [e["name"] for e in exts],
+            "page_source_m3u8": len(_session["source_hits"]),
+            "store_popup_m3u8": len(_session["store_hits"]),
+            "extensions_loaded": [e["name"] for e in _session["exts"]],
         }
         STAGE["error"] = json.dumps(diag, ensure_ascii=False)
         print(f"[capture] DIAGNOSIS: {STAGE['error']}", flush=True)
