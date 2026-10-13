@@ -15,6 +15,7 @@
     ctrl_hide_ms: 3000,
     last_stream_max_age_hours: 6,
     bad_hosts_max: 20,
+    fit_labels: { contain: 'Fit', cover: 'Crop', fill: 'Stretch' },
     stage_progress: {},
     stage_labels: {},
     messages: {
@@ -30,6 +31,7 @@
       copy_failed: 'Copy failed',
       no_stream_yet: 'No stream yet',
       live_toast: 'Live',
+      rotate_hint: 'Turn your phone sideways for a full view',
       pill: {
         ready: 'Ready', idle: 'Idle', capturing: 'Capturing', loading: 'Loading',
         live: 'Live', no_stream: 'No stream', waking: 'Waking server', offline: 'Offline',
@@ -53,7 +55,9 @@
     const M3U8 = /\.m3u8(\?|#|$)/i;
     const LAST_KEY = 'stream:last';
     const BAD_KEY = 'stream:badhosts';
+    const FIT_KEY = 'stream:fit';
     const LAST_MAX_AGE_MS = C.last_stream_max_age_hours * 3600 * 1000;
+    const FIT_MODES = ['contain', 'cover', 'fill'];   // Fit, Crop, Stretch
 
     const $ = (id) => document.getElementById(id);
     const stage = $('stage');
@@ -76,6 +80,7 @@
     const timeEl = $('time');
     const muteBtn = $('mute');
     const qualitySel = $('quality');
+    const fitBtn = $('fit');
     const fsBtn = $('fs');
 
     let hls = null;
@@ -88,13 +93,14 @@
     let seeking = false;
     let isLive = false;
     let hideTimer = null;
+    let fitIdx = 0;
 
     // ---------- helpers ----------
-    function toastMsg(text) {
+    function toastMsg(text, ms = 1600) {
       toast.textContent = text;
       toast.classList.add('show');
       clearTimeout(toastMsg.t);
-      toastMsg.t = setTimeout(() => toast.classList.remove('show'), 1600);
+      toastMsg.t = setTimeout(() => toast.classList.remove('show'), ms);
     }
 
     function setPill(kind, text) {
@@ -173,6 +179,59 @@
       if (v && v.url && Date.now() - v.t < LAST_MAX_AGE_MS) return v;
       return null;
     }
+
+    // ---------- fit: Fit / Crop / Stretch ----------
+    function applyFit() {
+      const mode = FIT_MODES[fitIdx];
+      video.style.objectFit = mode;
+      fitBtn.textContent = C.fit_labels[mode] || mode;
+    }
+
+    fitBtn.addEventListener('click', () => {
+      fitIdx = (fitIdx + 1) % FIT_MODES.length;
+      writeJSON(FIT_KEY, FIT_MODES[fitIdx]);
+      applyFit();
+    });
+
+    // ---------- fullscreen + landscape ----------
+    // Android Chrome: fullscreen, then lock to landscape.
+    // iPhone: native video fullscreen (the system rotates it).
+    async function enterFullscreen() {
+      try {
+        if (stage.requestFullscreen) {
+          await stage.requestFullscreen();
+          if (screen.orientation && screen.orientation.lock) {
+            await screen.orientation.lock('landscape');
+          }
+        } else if (video.webkitEnterFullscreen) {
+          video.webkitEnterFullscreen();
+        }
+      } catch (_) {
+        // Lock not allowed on this device. Fullscreen still works, so ask the user to turn the phone.
+        toastMsg(M.rotate_hint, 2600);
+      }
+    }
+
+    function leaveFullscreen() {
+      try {
+        if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+      } catch (_) { /* ignore */ }
+      if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
+      if (video.webkitDisplayingFullscreen && video.webkitExitFullscreen) video.webkitExitFullscreen();
+    }
+
+    fsBtn.addEventListener('click', () => {
+      if (document.fullscreenElement || video.webkitDisplayingFullscreen) leaveFullscreen();
+      else enterFullscreen();
+    });
+
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) {
+        try {
+          if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+        } catch (_) { /* ignore */ }
+      }
+    });
 
     // ---------- controls: show on tap, hide while playing ----------
     function showControls() {
@@ -258,12 +317,6 @@
     muteBtn.addEventListener('click', () => {
       video.muted = !video.muted;
       muteBtn.textContent = video.muted ? '🔇' : '🔊';
-    });
-
-    // Fullscreen only from this button, so the screen does not rotate by accident.
-    fsBtn.addEventListener('click', () => {
-      if (stage.requestFullscreen) stage.requestFullscreen().catch(() => {});
-      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); // iPhone
     });
 
     // ---------- playback ----------
@@ -446,6 +499,9 @@
     });
 
     // ---------- start ----------
+    fitIdx = Math.max(0, FIT_MODES.indexOf(readJSON(FIT_KEY, 'contain')));
+    applyFit();
+
     // 1. Last known stream plays from cache immediately, before the server answers.
     const last = loadLast();
     if (last) playStream(last.url, last.proxy);
