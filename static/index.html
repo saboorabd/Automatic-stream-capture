@@ -32,15 +32,22 @@
   .pill.warn { color: var(--warn); border-color: #4d3f1d; }
   .pill.err { color: var(--err); border-color: #4d2222; }
   main { width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 12px; }
+  .bar { height: 3px; margin: 0 0 10px; background: #1a2338; border-radius: 3px; overflow: hidden; }
+  .bar i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent), #b08cff); transition: width .5s ease;
+  }
   .stage {
     position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
     border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
+    touch-action: manipulation;
   }
   video { width: 100%; height: 100%; display: block; background: #000; }
   .overlay {
     position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
     background: radial-gradient(circle at 50% 40%, #16203a, #000 75%);
+    pointer-events: none;
   }
   .overlay.hide { display: none; }
   .spinner {
@@ -52,14 +59,17 @@
   .msg { max-width: 460px; font-size: 14px; color: var(--mute); word-break: break-word; }
   .msg.err { color: var(--err); }
 
+  /* Controls: shown on tap, hidden again while playing. Tapping the video never pauses it. */
   .ctrl {
     position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
-    display: flex; align-items: center; gap: 8px; padding: 22px 10px 8px;
+    display: flex; align-items: center; gap: 8px; padding: 26px 10px 8px;
     background: linear-gradient(transparent, rgba(0,0,0,.85));
+    opacity: 0; transition: opacity .25s; pointer-events: none;
   }
+  .stage.show-ctrl .ctrl { opacity: 1; pointer-events: auto; }
   .ctrl button {
-    background: transparent; color: #fff; font-weight: 500; font-size: 17px;
-    padding: 4px 8px; border-radius: 8px;
+    background: transparent; color: #fff; border: 0; font-size: 18px;
+    padding: 4px 8px; border-radius: 8px; cursor: pointer;
   }
   .seek { flex: 1; min-width: 0; accent-color: var(--accent); }
   .time { font-size: 13px; color: #fff; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -67,17 +77,15 @@
     font-size: 12px; font-weight: 700; color: #fff; background: var(--live);
     padding: 3px 9px; border-radius: 6px; letter-spacing: .08em;
   }
+  .golive {
+    font-size: 12px; color: #fff; border: 1px solid #fff; border-radius: 8px; padding: 3px 8px;
+  }
   .hide { display: none !important; }
   select {
     background: rgba(18,24,38,.9); color: #fff; border: 1px solid var(--line);
     border-radius: 8px; padding: 5px 6px; font-size: 13px;
   }
 
-  .bar { height: 3px; margin-top: 12px; background: #1a2338; border-radius: 3px; overflow: hidden; }
-  .bar i {
-    display: block; height: 100%; width: 0;
-    background: linear-gradient(90deg, var(--accent), #b08cff); transition: width .5s ease;
-  }
   .dock { margin-top: auto; padding: 14px 12px 18px; background: linear-gradient(180deg, transparent, var(--bg) 35%); }
   form { display: flex; gap: 8px; max-width: 1100px; margin: 0 auto; }
   input {
@@ -114,7 +122,7 @@
   </header>
 
   <main>
-    <div class="bar" style="margin:0 0 10px"><i id="progress"></i></div>
+    <div class="bar"><i id="progress"></i></div>
     <div id="stage" class="stage">
       <video id="v" playsinline muted autoplay></video>
 
@@ -123,10 +131,11 @@
         <div id="msg" class="msg">Connecting…</div>
       </div>
 
-      <div id="ctrl" class="ctrl">
+      <div class="ctrl">
         <button id="play" type="button" aria-label="Play or pause">▶</button>
         <input id="seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
         <span id="live" class="live hide">LIVE</span>
+        <button id="golive" class="golive hide" type="button">Go live</button>
         <span id="time" class="time">0:00 / 0:00</span>
         <button id="mute" type="button" aria-label="Sound">🔇</button>
         <select id="quality" aria-label="Quality"><option value="-1">Auto</option></select>
@@ -175,6 +184,7 @@
   const playBtn = $('play');
   const seek = $('seek');
   const liveEl = $('live');
+  const goLiveBtn = $('golive');
   const timeEl = $('time');
   const muteBtn = $('mute');
   const qualitySel = $('quality');
@@ -185,6 +195,7 @@
   const BAD_KEY = 'stream:badhosts';
   const LAST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const KEEPALIVE_MS = 4 * 60 * 1000;
+  const CTRL_HIDE_MS = 3000;
   const PROGRESS = {
     launching_chrome: 10, chrome_started: 25, opening_page: 40,
     page_loaded: 55, waiting_for_stream: 70, stream_found: 95,
@@ -199,15 +210,17 @@
   };
 
   let hls = null;
-  let rawUrl = null;      // Stream as found.
-  let proxyUrl = null;    // Same stream through the server proxy.
+  let rawUrl = null;
+  let proxyUrl = null;
   let usingProxy = false;
-  let fragOk = false;     // Has any fragment loaded from the current source?
+  let fragOk = false;
   let netRetries = 0;
   let statusTick = 0;
   let seeking = false;
+  let isLive = false;
+  let hideTimer = null;
 
-  // ---------- small helpers ----------
+  // ---------- helpers ----------
   function toastMsg(text) {
     toast.textContent = text;
     toast.classList.add('show');
@@ -269,7 +282,6 @@
     try { return new URL(url).host; } catch (_) { return ''; }
   }
 
-  // Remember hosts where direct playback is blocked (CORS), so next time we go straight to the proxy.
   function directBlocked(url) {
     return readJSON(BAD_KEY, []).includes(hostOf(url));
   }
@@ -293,20 +305,38 @@
     return null;
   }
 
-  // ---------- controls ----------
-  function setLive(isLive) {
-    liveEl.classList.toggle('hide', !isLive);
-    timeEl.classList.toggle('hide', isLive);
-    seek.classList.toggle('hide', isLive);
+  // ---------- controls (show on tap, hide while playing) ----------
+  function showControls() {
+    stage.classList.add('show-ctrl');
+    clearTimeout(hideTimer);
+    if (!video.paused) {
+      hideTimer = setTimeout(() => stage.classList.remove('show-ctrl'), CTRL_HIDE_MS);
+    }
+  }
+
+  // Tapping the picture only toggles the controls. It never pauses playback.
+  stage.addEventListener('click', (e) => {
+    if (e.target.closest('.ctrl')) return;
+    if (stage.classList.contains('show-ctrl')) stage.classList.remove('show-ctrl');
+    else showControls();
+  });
+
+  function setLive(live) {
+    isLive = live;
+    liveEl.classList.toggle('hide', !live);
+    goLiveBtn.classList.toggle('hide', !live);
+    seek.classList.toggle('hide', live);
+    timeEl.classList.toggle('hide', live);
   }
 
   function updateTime() {
     const d = video.duration;
     if (d === Infinity) { setLive(true); return; }
     if (!isFinite(d)) return;
-    setLive(false);
-    timeEl.textContent = `${fmt(video.currentTime)} / ${fmt(d)}`;
-    if (!seeking) seek.value = String(Math.round((video.currentTime / d) * 1000));
+    if (!isLive) {
+      timeEl.textContent = `${fmt(video.currentTime)} / ${fmt(d)}`;
+      if (!seeking) seek.value = String(Math.round((video.currentTime / d) * 1000));
+    }
   }
 
   function fillQuality(inst) {
@@ -324,14 +354,14 @@
     inst.levels.forEach((lvl, idx) => {
       if (!lvl.height) return;
       const cur = best.get(lvl.height);
-      if (!cur || (lvl.bitrate || 0) > (inst.levels[cur].bitrate || 0)) best.set(lvl.height, idx);
+      if (cur === undefined || (lvl.bitrate || 0) > (inst.levels[cur].bitrate || 0)) best.set(lvl.height, idx);
     });
     [...best.keys()].sort((a, b) => b - a).forEach((h) => add(String(best.get(h)), h + 'p'));
     qualitySel.value = '-1';
   }
 
   qualitySel.addEventListener('change', () => {
-    if (hls) hls.currentLevel = Number(qualitySel.value); // -1 means Auto.
+    if (hls) hls.currentLevel = Number(qualitySel.value); // -1 = Auto.
   });
 
   playBtn.addEventListener('click', () => {
@@ -339,13 +369,15 @@
     else video.pause();
   });
 
-  video.addEventListener('click', () => {
-    if (video.paused) video.play().catch(() => {});
-    else video.pause();
+  goLiveBtn.addEventListener('click', () => {
+    if (hls && hls.liveSyncPosition) video.currentTime = hls.liveSyncPosition;
+    else if (isFinite(video.duration)) video.currentTime = video.duration;
+    video.play().catch(() => {});
+    toastMsg('Live');
   });
 
-  video.addEventListener('play', () => { playBtn.textContent = '❚❚'; });
-  video.addEventListener('pause', () => { playBtn.textContent = '▶'; });
+  video.addEventListener('play', () => { playBtn.textContent = '❚❚'; showControls(); });
+  video.addEventListener('pause', () => { playBtn.textContent = '▶'; showControls(); });
   video.addEventListener('timeupdate', updateTime);
   video.addEventListener('durationchange', updateTime);
 
@@ -361,6 +393,7 @@
     muteBtn.textContent = video.muted ? '🔇' : '🔊';
   });
 
+  // Fullscreen only from this button. Tapping the video never triggers it, so the screen does not rotate by accident.
   fsBtn.addEventListener('click', () => {
     if (stage.requestFullscreen) stage.requestFullscreen().catch(() => {});
     else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); // iPhone
@@ -371,7 +404,6 @@
     if (!d.fatal) return;
 
     if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
-      // Direct failed before any fragment loaded (usually CORS). Use the proxy from now on.
       if (!usingProxy && proxyUrl) {
         if (!fragOk) markDirectBlocked(rawUrl);
         usingProxy = true;
@@ -382,7 +414,7 @@
       }
       netRetries += 1;
       if (netRetries > 5) {
-        rawUrl = null; // Link is dead. The next check picks up a fresh one.
+        rawUrl = null;
         netRetries = 0;
         showOverlay('Reconnecting to a fresh stream…');
         return;
@@ -398,9 +430,9 @@
   function createHls() {
     hls = new Hls({
       enableWorker: true,
-      capLevelToPlayerSize: true,   // Do not pick 1080p for a small phone screen.
-      startFragPrefetch: true,      // Start downloading the next piece while the first plays.
-      maxBufferLength: 10,          // Less buffering = faster first frame.
+      capLevelToPlayerSize: true,
+      startFragPrefetch: true,
+      maxBufferLength: 10,
       backBufferLength: 20,
     });
     hls.attachMedia(video);
@@ -419,12 +451,12 @@
 
     if (hasHls) {
       if (!hls) createHls();
-      usingProxy = !!proxyUrl && directBlocked(url);  // Known-blocked hosts skip the direct try.
+      usingProxy = !!proxyUrl && directBlocked(url);
       fragOk = false;
       netRetries = 0;
       hls.loadSource(usingProxy ? proxyUrl : url);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = proxyUrl || url;  // Native HLS (iPhone Safari) uses the proxy.
+      video.src = proxyUrl || url;
       video.play().catch(() => {});
     } else {
       showOverlay('This browser cannot play HLS.', true);
@@ -546,13 +578,9 @@
   });
 
   // ---------- start ----------
-  // 1. Last known stream plays from cache immediately, before the server answers.
   const last = loadLast();
-  if (last) {
-    playStream(last.url, last.proxy);
-  }
+  if (last) playStream(last.url, last.proxy);
 
-  // 2. Then sync with the server in the background.
   keepAlive();
   checkStream();
   checkStatus();
