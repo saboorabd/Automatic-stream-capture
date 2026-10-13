@@ -5,11 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a0d14">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://automatic-stream-capture.onrender.com" crossorigin>
 <title>Stream</title>
 <style>
   :root {
     --bg: #0a0d14; --panel: #121826; --line: #1f2a40; --text: #e9eef8; --mute: #8592b0;
-    --accent: #7c9cff; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+    --accent: #7c9cff; --ok: #34d399; --warn: #fbbf24; --err: #f87171; --live: #e11d48;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -37,7 +38,7 @@
   }
   video { width: 100%; height: 100%; display: block; background: #000; }
   .overlay {
-    position: absolute; inset: 0; display: flex; flex-direction: column;
+    position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
     background: radial-gradient(circle at 50% 40%, #16203a, #000 75%);
   }
@@ -50,15 +51,34 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .msg { max-width: 460px; font-size: 14px; color: var(--mute); word-break: break-word; }
   .msg.err { color: var(--err); }
+
+  .ctrl {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+    display: flex; align-items: center; gap: 8px; padding: 22px 10px 8px;
+    background: linear-gradient(transparent, rgba(0,0,0,.85));
+  }
+  .ctrl button {
+    background: transparent; color: #fff; font-weight: 500; font-size: 17px;
+    padding: 4px 8px; border-radius: 8px;
+  }
+  .seek { flex: 1; min-width: 0; accent-color: var(--accent); }
+  .time { font-size: 13px; color: #fff; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .live {
+    font-size: 12px; font-weight: 700; color: #fff; background: var(--live);
+    padding: 3px 9px; border-radius: 6px; letter-spacing: .08em;
+  }
+  .hide { display: none !important; }
+  select {
+    background: rgba(18,24,38,.9); color: #fff; border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 6px; font-size: 13px;
+  }
+
   .bar { height: 3px; margin-top: 12px; background: #1a2338; border-radius: 3px; overflow: hidden; }
   .bar i {
     display: block; height: 100%; width: 0;
     background: linear-gradient(90deg, var(--accent), #b08cff); transition: width .5s ease;
   }
-  .dock {
-    margin-top: auto; padding: 14px 12px 18px;
-    background: linear-gradient(180deg, transparent, var(--bg) 35%);
-  }
+  .dock { margin-top: auto; padding: 14px 12px 18px; background: linear-gradient(180deg, transparent, var(--bg) 35%); }
   form { display: flex; gap: 8px; max-width: 1100px; margin: 0 auto; }
   input {
     flex: 1; min-width: 0; padding: 14px 16px; border-radius: 14px;
@@ -66,18 +86,18 @@
     font-size: 16px; outline: none;
   }
   input:focus { border-color: var(--accent); }
-  button {
+  button.go {
     padding: 0 22px; border: 0; border-radius: 14px; cursor: pointer;
     background: var(--accent); color: #06101f; font-weight: 700; font-size: 15px;
   }
-  button:disabled { opacity: .5; }
+  button.go:disabled { opacity: .5; }
   .tools {
     display: flex; align-items: center; justify-content: center; gap: 10px;
     margin: 10px auto 0; max-width: 1100px; min-height: 30px;
   }
   .ghost {
     background: transparent; border: 1px solid var(--line); color: var(--mute);
-    font-weight: 500; font-size: 13px; padding: 8px 12px; border-radius: 10px;
+    font-weight: 500; font-size: 13px; padding: 8px 12px; border-radius: 10px; cursor: pointer;
   }
   .toast {
     position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%);
@@ -94,24 +114,35 @@
   </header>
 
   <main>
-    <div class="stage">
-      <video id="v" controls autoplay muted playsinline></video>
+    <div class="bar" style="margin:0 0 10px"><i id="progress"></i></div>
+    <div id="stage" class="stage">
+      <video id="v" playsinline muted autoplay></video>
+
       <div id="overlay" class="overlay">
         <div id="spin" class="spinner"></div>
         <div id="msg" class="msg">Connecting…</div>
       </div>
+
+      <div id="ctrl" class="ctrl">
+        <button id="play" type="button" aria-label="Play or pause">▶</button>
+        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+        <span id="live" class="live hide">LIVE</span>
+        <span id="time" class="time">0:00 / 0:00</span>
+        <button id="mute" type="button" aria-label="Sound">🔇</button>
+        <select id="quality" aria-label="Quality"><option value="-1">Auto</option></select>
+        <button id="fs" type="button" aria-label="Fullscreen">⛶</button>
+      </div>
     </div>
-    <div class="bar"><i id="progress"></i></div>
   </main>
 
   <div class="dock">
     <form id="form" autocomplete="off">
       <input id="src" type="text" inputmode="url" placeholder="Page URL or .m3u8 link" required>
-      <button id="go" type="submit">Go</button>
+      <button id="go" class="go" type="submit">Go</button>
     </form>
     <div class="tools">
       <button id="copy" class="ghost" type="button">Copy stream link</button>
-      <span id="age" class="pill" style="display:none"></span>
+      <span id="age" class="pill hide"></span>
     </div>
   </div>
 
@@ -122,7 +153,13 @@
 (() => {
   'use strict';
 
+  // Server address. On GitHub Pages it points to Render; on Render it stays same-origin.
+  const API = location.hostname.endsWith('github.io')
+    ? 'https://automatic-stream-capture.onrender.com'
+    : '';
+
   const $ = (id) => document.getElementById(id);
+  const stage = $('stage');
   const video = $('v');
   const overlay = $('overlay');
   const msg = $('msg');
@@ -135,11 +172,19 @@
   const copyBtn = $('copy');
   const age = $('age');
   const toast = $('toast');
+  const playBtn = $('play');
+  const seek = $('seek');
+  const liveEl = $('live');
+  const timeEl = $('time');
+  const muteBtn = $('mute');
+  const qualitySel = $('quality');
+  const fsBtn = $('fs');
 
   const M3U8 = /\.m3u8(\?|#|$)/i;
   const LAST_KEY = 'stream:last';
-  const LAST_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // Remember the last stream for 6 hours.
-  const KEEPALIVE_MS = 4 * 60 * 1000;           // Ping the server every 4 minutes while the page is open.
+  const BAD_KEY = 'stream:badhosts';
+  const LAST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  const KEEPALIVE_MS = 4 * 60 * 1000;
   const PROGRESS = {
     launching_chrome: 10, chrome_started: 25, opening_page: 40,
     page_loaded: 55, waiting_for_stream: 70, stream_found: 95,
@@ -154,13 +199,15 @@
   };
 
   let hls = null;
-  let rawUrl = null;      // Stream as found. Played directly first (fastest).
-  let proxyUrl = null;    // Same stream through the server proxy (used if CORS blocks direct).
+  let rawUrl = null;      // Stream as found.
+  let proxyUrl = null;    // Same stream through the server proxy.
   let usingProxy = false;
+  let fragOk = false;     // Has any fragment loaded from the current source?
   let netRetries = 0;
   let statusTick = 0;
-  let serverAwake = false;
+  let seeking = false;
 
+  // ---------- small helpers ----------
   function toastMsg(text) {
     toast.textContent = text;
     toast.classList.add('show');
@@ -180,9 +227,7 @@
     spin.style.display = isError ? 'none' : 'block';
   }
 
-  function hideOverlay() {
-    overlay.classList.add('hide');
-  }
+  function hideOverlay() { overlay.classList.add('hide'); }
 
   function ago(iso) {
     const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
@@ -200,63 +245,186 @@
     }
   }
 
-  function saveLast(url, proxy) {
+  function fmt(sec) {
+    if (!isFinite(sec) || sec < 0) return '0:00';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const mm = h ? String(m).padStart(2, '0') : String(m);
+    return (h ? h + ':' : '') + mm + ':' + String(s).padStart(2, '0');
+  }
+
+  function readJSON(key, fallback) {
     try {
-      localStorage.setItem(LAST_KEY, JSON.stringify({ url, proxy, t: Date.now() }));
-    } catch (_) { /* storage blocked; ignore */ }
+      const v = JSON.parse(localStorage.getItem(key));
+      return v === null || v === undefined ? fallback : v;
+    } catch (_) { return fallback; }
+  }
+
+  function writeJSON(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage blocked */ }
+  }
+
+  function hostOf(url) {
+    try { return new URL(url).host; } catch (_) { return ''; }
+  }
+
+  // Remember hosts where direct playback is blocked (CORS), so next time we go straight to the proxy.
+  function directBlocked(url) {
+    return readJSON(BAD_KEY, []).includes(hostOf(url));
+  }
+
+  function markDirectBlocked(url) {
+    const host = hostOf(url);
+    const list = readJSON(BAD_KEY, []);
+    if (host && !list.includes(host)) {
+      list.push(host);
+      writeJSON(BAD_KEY, list.slice(-20));
+    }
+  }
+
+  function saveLast(url, proxy) {
+    writeJSON(LAST_KEY, { url, proxy, t: Date.now() });
   }
 
   function loadLast() {
-    try {
-      const v = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
-      if (v && v.url && Date.now() - v.t < LAST_MAX_AGE_MS) return v;
-    } catch (_) { /* ignore */ }
+    const v = readJSON(LAST_KEY, null);
+    if (v && v.url && Date.now() - v.t < LAST_MAX_AGE_MS) return v;
     return null;
   }
 
-  // One hls.js instance, reused across streams (no black flash on switch).
-  function createHls() {
-    hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 20 });
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-    hls.on(Hls.Events.FRAG_LOADED, () => { netRetries = 0; });
-    hls.on(Hls.Events.ERROR, (_e, d) => {
-      if (!d.fatal) return;
-
-      if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        // Direct failed (usually CORS or an expired link). Try the proxy once.
-        if (!usingProxy && proxyUrl) {
-          usingProxy = true;
-          netRetries = 0;
-          hls.loadSource(proxyUrl);
-          return;
-        }
-        netRetries += 1;
-        if (netRetries > 5) {
-          // Link is dead (expired). Clear it so the next status check picks up a fresh one.
-          rawUrl = null;
-          netRetries = 0;
-          showOverlay('Reconnecting to a fresh stream…');
-          return;
-        }
-        hls.startLoad();
-      } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        hls.recoverMediaError();
-      } else {
-        showOverlay('Player error: ' + d.details, true);
-      }
-    });
+  // ---------- controls ----------
+  function setLive(isLive) {
+    liveEl.classList.toggle('hide', !isLive);
+    timeEl.classList.toggle('hide', isLive);
+    seek.classList.toggle('hide', isLive);
   }
 
-  // Direct first (fastest). Proxy is used only if the browser blocks the direct URL.
-  function attach(directUrl) {
-    if (window.Hls && Hls.isSupported()) {
+  function updateTime() {
+    const d = video.duration;
+    if (d === Infinity) { setLive(true); return; }
+    if (!isFinite(d)) return;
+    setLive(false);
+    timeEl.textContent = `${fmt(video.currentTime)} / ${fmt(d)}`;
+    if (!seeking) seek.value = String(Math.round((video.currentTime / d) * 1000));
+  }
+
+  function fillQuality(inst) {
+    qualitySel.innerHTML = '';
+    const add = (value, label) => {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      qualitySel.appendChild(o);
+    };
+    add('-1', 'Auto');
+
+    // One entry per resolution. If a resolution has several bitrates, keep the highest.
+    const best = new Map();
+    inst.levels.forEach((lvl, idx) => {
+      if (!lvl.height) return;
+      const cur = best.get(lvl.height);
+      if (!cur || (lvl.bitrate || 0) > (inst.levels[cur].bitrate || 0)) best.set(lvl.height, idx);
+    });
+    [...best.keys()].sort((a, b) => b - a).forEach((h) => add(String(best.get(h)), h + 'p'));
+    qualitySel.value = '-1';
+  }
+
+  qualitySel.addEventListener('change', () => {
+    if (hls) hls.currentLevel = Number(qualitySel.value); // -1 means Auto.
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+  });
+
+  video.addEventListener('click', () => {
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+  });
+
+  video.addEventListener('play', () => { playBtn.textContent = '❚❚'; });
+  video.addEventListener('pause', () => { playBtn.textContent = '▶'; });
+  video.addEventListener('timeupdate', updateTime);
+  video.addEventListener('durationchange', updateTime);
+
+  seek.addEventListener('input', () => { seeking = true; });
+  seek.addEventListener('change', () => {
+    const d = video.duration;
+    if (isFinite(d)) video.currentTime = (Number(seek.value) / 1000) * d;
+    seeking = false;
+  });
+
+  muteBtn.addEventListener('click', () => {
+    video.muted = !video.muted;
+    muteBtn.textContent = video.muted ? '🔇' : '🔊';
+  });
+
+  fsBtn.addEventListener('click', () => {
+    if (stage.requestFullscreen) stage.requestFullscreen().catch(() => {});
+    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); // iPhone
+  });
+
+  // ---------- playback ----------
+  function onHlsError(_e, d) {
+    if (!d.fatal) return;
+
+    if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
+      // Direct failed before any fragment loaded (usually CORS). Use the proxy from now on.
+      if (!usingProxy && proxyUrl) {
+        if (!fragOk) markDirectBlocked(rawUrl);
+        usingProxy = true;
+        fragOk = false;
+        netRetries = 0;
+        hls.loadSource(proxyUrl);
+        return;
+      }
+      netRetries += 1;
+      if (netRetries > 5) {
+        rawUrl = null; // Link is dead. The next check picks up a fresh one.
+        netRetries = 0;
+        showOverlay('Reconnecting to a fresh stream…');
+        return;
+      }
+      hls.startLoad();
+    } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      hls.recoverMediaError();
+    } else {
+      showOverlay('Player error: ' + d.details, true);
+    }
+  }
+
+  function createHls() {
+    hls = new Hls({
+      enableWorker: true,
+      capLevelToPlayerSize: true,   // Do not pick 1080p for a small phone screen.
+      startFragPrefetch: true,      // Start downloading the next piece while the first plays.
+      maxBufferLength: 10,          // Less buffering = faster first frame.
+      backBufferLength: 20,
+    });
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      fillQuality(hls);
+      video.play().catch(() => {});
+    });
+    hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => setLive(!!data.details.live));
+    hls.on(Hls.Events.FRAG_LOADED, () => { fragOk = true; netRetries = 0; });
+    hls.on(Hls.Events.ERROR, onHlsError);
+  }
+
+  function attach(url) {
+    const hasHls = window.Hls && Hls.isSupported();
+    qualitySel.classList.toggle('hide', !hasHls);
+
+    if (hasHls) {
       if (!hls) createHls();
-      usingProxy = false;
+      usingProxy = !!proxyUrl && directBlocked(url);  // Known-blocked hosts skip the direct try.
+      fragOk = false;
       netRetries = 0;
-      hls.loadSource(directUrl);
+      hls.loadSource(usingProxy ? proxyUrl : url);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = proxyUrl || directUrl; // Native HLS (iOS Safari) uses the proxy.
+      video.src = proxyUrl || url;  // Native HLS (iPhone Safari) uses the proxy.
       video.play().catch(() => {});
     } else {
       showOverlay('This browser cannot play HLS.', true);
@@ -265,32 +433,29 @@
 
   function playStream(url, proxy) {
     rawUrl = url;
-    proxyUrl = proxy;
+    proxyUrl = proxy && !proxy.startsWith('http') ? API + proxy : proxy;
     hideOverlay();
     setPill('ok', 'Live');
     attach(url);
-    saveLast(url, proxy);
+    saveLast(url, proxyUrl);
   }
 
-  // Keeps the Render server awake while the page is open.
+  // ---------- server sync ----------
   async function keepAlive() {
     try {
-      await fetch('/api/status?ka=' + Date.now(), { cache: 'no-store' });
-      serverAwake = true;
-    } catch (_) {
-      serverAwake = false;
-    }
+      await fetch(API + '/api/status?ka=' + Date.now(), { cache: 'no-store' });
+    } catch (_) { /* offline or server asleep */ }
   }
 
   async function checkStream() {
     try {
-      const res = await fetch('/api/stream?t=' + Date.now(), { cache: 'no-store' });
+      const res = await fetch(API + '/api/stream?t=' + Date.now(), { cache: 'no-store' });
       if (res.status === 404) return;
       const data = await res.json();
 
       if (data.updated_at) {
         age.textContent = 'updated ' + ago(data.updated_at);
-        age.style.display = 'inline-block';
+        age.classList.remove('hide');
       }
       if (data.url && data.url !== rawUrl) playStream(data.url, data.proxy_url);
     } catch (_) { /* server waking up; next tick retries */ }
@@ -298,12 +463,11 @@
 
   async function checkStatus() {
     try {
-      const res = await fetch('/api/status?t=' + Date.now(), { cache: 'no-store' });
+      const res = await fetch(API + '/api/status?t=' + Date.now(), { cache: 'no-store' });
       const s = await res.json();
-      serverAwake = true;
       const name = (s.stage && s.stage.name) || 'idle';
 
-      if (rawUrl) return; // Already playing; the stream check handles updates.
+      if (rawUrl) return;
 
       if (LABELS[name]) {
         setPill('warn', 'Capturing');
@@ -321,12 +485,14 @@
         showOverlay('Paste a page or .m3u8 link below.');
       }
     } catch (_) {
-      serverAwake = false;
-      setPill('warn', 'Waking server');
-      showOverlay('Waking the server (free plan, about 30–60 s)…');
+      if (!rawUrl) {
+        setPill('warn', 'Waking server');
+        showOverlay('Server is waking up (free plan, can take a minute)…');
+      }
     }
   }
 
+  // ---------- user input ----------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const value = src.value.trim();
@@ -337,7 +503,7 @@
 
     go.disabled = true;
     try {
-      const res = await fetch('/api/target', {
+      const res = await fetch(API + '/api/target', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -362,15 +528,15 @@
 
   copyBtn.addEventListener('click', async () => {
     if (!proxyUrl) return toastMsg('No stream yet');
+    const link = proxyUrl.startsWith('http') ? proxyUrl : location.origin + proxyUrl;
     try {
-      await navigator.clipboard.writeText(location.origin + proxyUrl);
+      await navigator.clipboard.writeText(link);
       toastMsg('Stream link copied');
     } catch (_) {
       toastMsg('Copy failed');
     }
   });
 
-  // When the phone wakes or the tab comes back, refresh right away.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       keepAlive();
@@ -379,14 +545,14 @@
     }
   });
 
-  // 1. Play the last known stream instantly, while the server is still waking up.
+  // ---------- start ----------
+  // 1. Last known stream plays from cache immediately, before the server answers.
   const last = loadLast();
   if (last) {
     playStream(last.url, last.proxy);
-    setPill('ok', 'Last stream');
   }
 
-  // 2. Then sync with the server.
+  // 2. Then sync with the server in the background.
   keepAlive();
   checkStream();
   checkStatus();
