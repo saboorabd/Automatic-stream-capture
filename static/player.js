@@ -337,6 +337,7 @@
           rawUrl = null;
           netRetries = 0;
           showOverlay(M.reconnecting);
+          fetch(API + '/api/refresh', { method: 'POST' }).catch(() => {}); // ask server for a fresh link
           return;
         }
         hls.startLoad();
