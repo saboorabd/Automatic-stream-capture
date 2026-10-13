@@ -22,7 +22,7 @@ from urllib.parse import quote, urljoin, urlparse
 import requests
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from capture import STAGE, capture_once
+from capture import STAGE, capture_once, request_reload
 from cors import install_cors
 
 BASE_DIR = Path(__file__).resolve().parent
