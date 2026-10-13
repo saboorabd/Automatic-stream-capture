@@ -207,7 +207,14 @@ def api_target():
     return jsonify({"ok": True, "mode": "capture"}), 202
 PLAYER_FILES = {"player.js", "player-config.json"}
 
-
+@app.post("/api/refresh")
+def api_refresh():
+    """A viewer's link died. Reload the capture page so a fresh link is found."""
+    request_reload()
+    WAKE.set()
+    log("Refresh requested by viewer.")
+    return jsonify({"ok": True}), 202
+  
 @app.get("/<name>")
 def player_asset(name):
     if name not in PLAYER_FILES:
