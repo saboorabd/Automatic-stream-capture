@@ -7,6 +7,11 @@
   "ctrl_hide_ms": 3000,
   "last_stream_max_age_hours": 6,
   "bad_hosts_max": 20,
+  "fit_labels": {
+    "contain": "Fit",
+    "cover": "Crop",
+    "fill": "Stretch"
+  },
   "stage_progress": {
     "launching_chrome": 10,
     "chrome_started": 25,
@@ -36,6 +41,7 @@
     "copy_failed": "Copy failed",
     "no_stream_yet": "No stream yet",
     "live_toast": "Live",
+    "rotate_hint": "Turn your phone sideways for a full view",
     "pill": {
       "ready": "Ready",
       "idle": "Idle",
