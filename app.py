@@ -205,7 +205,14 @@ def api_target():
     WAKE.set()
     log(f"New page target: {value}")
     return jsonify({"ok": True, "mode": "capture"}), 202
+PLAYER_FILES = {"player.js", "player-config.json"}
 
+
+@app.get("/<name>")
+def player_asset(name):
+    if name not in PLAYER_FILES:
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(BASE_DIR / "static", name)
 
 @app.get("/api/stream")
 def api_stream():
