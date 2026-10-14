@@ -7,11 +7,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download the browser extensions into /opt/extensions/<name>/ at build time.
+# Browser extensions into /opt/extensions/<name>/ at build time.
 COPY fetch_extensions.py /tmp/fetch_extensions.py
 RUN python3 /tmp/fetch_extensions.py
 
 COPY . .
-ENV PYTHONUNBUFFERED=1 EXTENSIONS_ROOT=/opt/extensions XVFB_DISPLAY=:99
+RUN chmod +x /app/start.sh
 
-CMD ["python", "app.py"]
+ENV PYTHONUNBUFFERED=1 EXTENSIONS_ROOT=/opt/extensions DISPLAY=:99
+
+CMD ["/app/start.sh"]
