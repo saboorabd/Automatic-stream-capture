@@ -1,6 +1,7 @@
 #!/bin/sh
 # Extension-active runner.
 #  - Keeps a virtual screen (Xvfb) running, restarts it if it dies.
+#  - Starts keeper.sh, which keeps a fresh stream link ready.
 #  - Runs the app and restarts it automatically if it crashes.
 set -u
 
@@ -26,6 +27,9 @@ start_xvfb() {
 
 echo "[ext] extensions folder:"
 ls /opt/extensions 2>/dev/null || echo "[ext] no extensions folder found"
+
+# Keeper runs in the background for the whole life of the container.
+sh /app/keeper.sh &
 
 while true; do
   start_xvfb
