@@ -3,143 +3,48 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0a0d14">
+<meta name="theme-color" content="#07090f">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://automatic-stream-capture.onrender.com" crossorigin>
+<link rel="stylesheet" href="player.css">
 <title>Stream</title>
-<style>
-  :root {
-    --bg: #0a0d14; --panel: #121826; --line: #1f2a40; --text: #e9eef8; --mute: #8592b0;
-    --accent: #7c9cff; --ok: #34d399; --warn: #fbbf24; --err: #f87171; --live: #e11d48;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
-    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
-  }
-  header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; max-width: 1100px; width: 100%; margin: 0 auto;
-  }
-  .brand { font-weight: 700; letter-spacing: .02em; }
-  .pill {
-    font-size: 12px; padding: 5px 11px; border-radius: 999px;
-    background: var(--panel); border: 1px solid var(--line); color: var(--mute);
-  }
-  .pill.ok { color: var(--ok); border-color: #1d4d3e; }
-  .pill.warn { color: var(--warn); border-color: #4d3f1d; }
-  .pill.err { color: var(--err); border-color: #4d2222; }
-  main { width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 12px; }
-  .bar { height: 3px; margin: 0 0 10px; background: #1a2338; border-radius: 3px; overflow: hidden; }
-  .bar i {
-    display: block; height: 100%; width: 0;
-    background: linear-gradient(90deg, var(--accent), #b08cff); transition: width .5s ease;
-  }
-  .stage {
-    position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
-    border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
-    touch-action: manipulation;
-  }
-  video { width: 100%; height: 100%; display: block; background: #000; }
-  .overlay {
-    position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center;
-    background: radial-gradient(circle at 50% 40%, #16203a, #000 75%);
-    pointer-events: none;
-  }
-  .overlay.hide { display: none; }
-  .spinner {
-    width: 34px; height: 34px; border-radius: 50%;
-    border: 3px solid #26324f; border-top-color: var(--accent);
-    animation: spin .9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .msg { max-width: 460px; font-size: 14px; color: var(--mute); word-break: break-word; }
-  .msg.err { color: var(--err); }
-
-  /* Controls show on tap and hide while playing. Tapping the picture never pauses it. */
-  .ctrl {
-    position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
-    display: flex; align-items: center; gap: 8px; padding: 26px 10px 8px;
-    background: linear-gradient(transparent, rgba(0,0,0,.85));
-    opacity: 0; transition: opacity .25s; pointer-events: none;
-  }
-  .stage.show-ctrl .ctrl { opacity: 1; pointer-events: auto; }
-  .ctrl button {
-    background: transparent; color: #fff; border: 0; font-size: 18px;
-    padding: 4px 8px; border-radius: 8px; cursor: pointer;
-  }
-  .seek { flex: 1; min-width: 0; accent-color: var(--accent); }
-  .time { font-size: 13px; color: #fff; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .live {
-    font-size: 12px; font-weight: 700; color: #fff; background: var(--live);
-    padding: 3px 9px; border-radius: 6px; letter-spacing: .08em;
-  }
-  .golive { font-size: 12px; color: #fff; border: 1px solid #fff; border-radius: 8px; padding: 3px 8px; }
-  .hide { display: none !important; }
-  select {
-    background: rgba(18,24,38,.9); color: #fff; border: 1px solid var(--line);
-    border-radius: 8px; padding: 5px 6px; font-size: 13px;
-  }
-
-  .dock { margin-top: auto; padding: 14px 12px 18px; background: linear-gradient(180deg, transparent, var(--bg) 35%); }
-  form { display: flex; gap: 8px; max-width: 1100px; margin: 0 auto; }
-  input {
-    flex: 1; min-width: 0; padding: 14px 16px; border-radius: 14px;
-    border: 1px solid var(--line); background: var(--panel); color: var(--text);
-    font-size: 16px; outline: none;
-  }
-  input:focus { border-color: var(--accent); }
-  button.go {
-    padding: 0 22px; border: 0; border-radius: 14px; cursor: pointer;
-    background: var(--accent); color: #06101f; font-weight: 700; font-size: 15px;
-  }
-  button.go:disabled { opacity: .5; }
-  .tools {
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    margin: 10px auto 0; max-width: 1100px; min-height: 30px;
-  }
-  .ghost {
-    background: transparent; border: 1px solid var(--line); color: var(--mute);
-    font-weight: 500; font-size: 13px; padding: 8px 12px; border-radius: 10px; cursor: pointer;
-  }
-  .toast {
-    position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%);
-    background: #1a2540; border: 1px solid var(--line); padding: 9px 14px; border-radius: 10px;
-    font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap;
-  }
-  .toast.show { opacity: 1; }
-</style>
 </head>
 <body>
-  <header>
-    <div class="brand">Stream</div>
-    <span id="pill" class="pill">Connecting</span>
+  <header class="top">
+    <div class="brand"><span class="dot"></span>Stream</div>
+    <div class="top-right">
+      <span id="buf" class="chip hide"></span>
+      <span id="pill" class="chip pill">Connecting</span>
+    </div>
   </header>
 
   <main>
     <div class="bar"><i id="progress"></i></div>
+
     <div id="stage" class="stage">
       <video id="v" playsinline muted autoplay></video>
 
       <div id="overlay" class="overlay">
         <div id="spin" class="spinner"></div>
+        <div id="pct" class="pct"></div>
         <div id="msg" class="msg">Connecting…</div>
       </div>
 
       <div class="ctrl">
-        <button id="play" type="button" aria-label="Play or pause">▶</button>
-        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
-        <span id="live" class="live hide">LIVE</span>
-        <button id="golive" class="golive hide" type="button">Go live</button>
-        <span id="time" class="time">0:00 / 0:00</span>
-        <button id="mute" type="button" aria-label="Sound">🔇</button>
-        <select id="quality" aria-label="Quality"><option value="-1">Auto</option></select>
-        <button id="fs" type="button" aria-label="Fullscreen">⛶</button>
-                <button id="fit" type="button" aria-label="Fit, crop or stretch">Fit</button>
-        
+        <div class="row">
+          <input id="seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+        </div>
+        <div class="row">
+          <button id="play" type="button" aria-label="Play or pause">▶</button>
+          <span id="live" class="live hide">LIVE</span>
+          <button id="golive" class="golive hide" type="button">Go live</button>
+          <span id="time" class="time">0:00 / 0:00</span>
+          <span class="spacer"></span>
+          <button id="mute" type="button" aria-label="Sound">🔇</button>
+          <select id="quality" aria-label="Quality"><option value="-1">Auto</option></select>
+          <button id="fit" type="button" aria-label="Fit, crop or stretch">Fit</button>
+          <button id="fs" type="button" aria-label="Fullscreen">⛶</button>
+        </div>
       </div>
     </div>
   </main>
@@ -151,7 +56,7 @@
     </form>
     <div class="tools">
       <button id="copy" class="ghost" type="button">Copy stream link</button>
-      <span id="age" class="pill hide"></span>
+      <span id="age" class="chip hide"></span>
     </div>
   </div>
 
