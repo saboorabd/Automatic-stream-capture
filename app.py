@@ -1,11 +1,13 @@
 """
 Stream Capture server.
-  - POST /api/target : a page URL (auto-capture) or a direct .m3u8 URL (manual play).
-  - GET  /api/stream : current stream (raw url + proxy_url).
-  - GET  /api/status : state, capture stage, last error.
-  - GET  /proxy      : same-origin proxy. Adds Referer/Origin and CORS headers,
-                       rewrites HLS playlists so segments also go through here.
-  - GET  /           : player page.
+  - POST /api/target  : a page URL (auto-capture) or a direct .m3u8 URL (manual play).
+  - POST /api/refresh : a viewer's link died, reload the capture page.
+  - GET  /api/stream  : current stream (raw url + proxy_url).
+  - GET  /api/status  : state, capture stage, last error.
+  - GET  /proxy       : same-origin proxy. Adds Referer/Origin and CORS headers,
+                        rewrites HLS playlists so segments also go through here.
+  - GET  /            : player page.
+  - GET  /player.js, /player.css, /player-config.json : player files.
 """
 
 import ipaddress
@@ -29,6 +31,9 @@ BASE_DIR = Path(__file__).resolve().parent
 CFG = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
 
 M3U8_RE = re.compile(r"\.m3u8(?:$|[?#])", re.IGNORECASE)
+
+# Only these files are served from the root path. Everything else is 404.
+PLAYER_FILES = {"player.js", "player-config.json", "player.css"}
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -205,7 +210,7 @@ def api_target():
     WAKE.set()
     log(f"New page target: {value}")
     return jsonify({"ok": True, "mode": "capture"}), 202
-PLAYER_FILES = {"player.js", "player-config.json"}
+
 
 @app.post("/api/refresh")
 def api_refresh():
@@ -214,12 +219,7 @@ def api_refresh():
     WAKE.set()
     log("Refresh requested by viewer.")
     return jsonify({"ok": True}), 202
-  
-@app.get("/<name>")
-def player_asset(name):
-    if name not in PLAYER_FILES:
-        return jsonify({"error": "not found"}), 404
-    return send_from_directory(BASE_DIR / "static", name)
+
 
 @app.get("/api/stream")
 def api_stream():
@@ -310,6 +310,14 @@ def proxy():
         content_type=ctype or "application/octet-stream",
         headers=out_headers,
     )
+
+
+@app.get("/<name>")
+def player_asset(name):
+    """Serves only the player files listed in PLAYER_FILES. Anything else is 404."""
+    if name not in PLAYER_FILES:
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(BASE_DIR / "static", name)
 
 
 @app.get("/")
