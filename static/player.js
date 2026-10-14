@@ -73,6 +73,7 @@
     const VOL_KEY = 'stream:volume';
     const LAST_MAX_AGE_MS = C.last_stream_max_age_hours * 3600 * 1000;
     const FIT_MODES = ['contain', 'cover', 'fill'];
+    const LIVE_BUFFER_TARGET_S = 6;   // Live streams: show progress against 6 s, not 10 s.
 
     const $ = (id) => document.getElementById(id);
     const stage = $('stage');
@@ -233,26 +234,28 @@
       paintRange(vol, level);
     }
 
+    // ---------- buffer: seconds loaded ahead of the playhead ----------
+    function bufferSeconds() {
+      const t = video.currentTime;
+      const b = video.buffered;
+      for (let i = 0; i < b.length; i++) {
+        if (t >= b.start(i) - 0.25 && t <= b.end(i) + 0.25) {
+          return Math.max(0, b.end(i) - t);
+        }
+      }
+      return 0;
+    }
+
     function updateBufferChip() {
       if (!rawUrl || video.readyState < 2) {
         bufChip.classList.add('hide');
         return;
       }
+      const target = Math.max(1, isLive ? LIVE_BUFFER_TARGET_S : C.buffer_target_s);
+      const secs = bufferSeconds();
+      const percent = Math.min(100, Math.round((secs / target) * 100));
       bufChip.classList.remove('hide');
-      bufChip.textContent = `${M.buffer} ${bufferPercent()}%`;
-    }
-
-    // ---------- buffer percent: how far ahead the video is loaded ----------
-    function bufferPercent() {
-      const t = video.currentTime;
-      const b = video.buffered;
-      for (let i = 0; i < b.length; i++) {
-        if (t >= b.start(i) && t <= b.end(i)) {
-          const ahead = b.end(i) - t;
-          return Math.min(100, Math.round((ahead / C.buffer_target_s) * 100));
-        }
-      }
-      return 0;
+      bufChip.textContent = `${M.buffer} ${percent}% · ${secs.toFixed(1)}s`;
     }
 
     // ---------- play / pause ----------
@@ -462,10 +465,18 @@
     function createHls() {
       hls = new Hls({
         enableWorker: true,
+        // Fast first frame: start on the lowest quality, then climb as bandwidth allows.
+        startLevel: 0,
         capLevelToPlayerSize: true,
         startFragPrefetch: true,
-        maxBufferLength: 10,
-        backBufferLength: 20,
+        lowLatencyMode: true,           // Live streams: stay close to the live edge.
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 6,
+        maxBufferLength: 8,             // Less to load before the first frame.
+        maxMaxBufferLength: 20,
+        backBufferLength: 10,
+        manifestLoadingTimeOut: 8000,
+        fragLoadingTimeOut: 15000,
       });
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
