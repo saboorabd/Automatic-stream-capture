@@ -1,4 +1,4 @@
-/* Stream player logic. Text, timings and stage labels come from player-config.json. */
+/* Stream player logic. Text, timings and labels come from player-config.json. */
 (() => {
   'use strict';
 
@@ -15,6 +15,7 @@
     ctrl_hide_ms: 3000,
     last_stream_max_age_hours: 6,
     bad_hosts_max: 20,
+    buffer_target_s: 10,
     fit_labels: { contain: 'Fit', cover: 'Crop', fill: 'Stretch' },
     stage_progress: {},
     stage_labels: {},
@@ -30,8 +31,11 @@
       copied: 'Stream link copied',
       copy_failed: 'Copy failed',
       no_stream_yet: 'No stream yet',
-      live_toast: 'Live',
+      live_toast: 'Live edge',
       rotate_hint: 'Turn your phone sideways for a full view',
+      buffer: 'Buffer',
+      loading: 'Loading',
+      updated: 'updated',
       pill: {
         ready: 'Ready', idle: 'Idle', capturing: 'Capturing', loading: 'Loading',
         live: 'Live', no_stream: 'No stream', waking: 'Waking server', offline: 'Offline',
@@ -57,15 +61,17 @@
     const BAD_KEY = 'stream:badhosts';
     const FIT_KEY = 'stream:fit';
     const LAST_MAX_AGE_MS = C.last_stream_max_age_hours * 3600 * 1000;
-    const FIT_MODES = ['contain', 'cover', 'fill'];   // Fit, Crop, Stretch
+    const FIT_MODES = ['contain', 'cover', 'fill'];
 
     const $ = (id) => document.getElementById(id);
     const stage = $('stage');
     const video = $('v');
     const overlay = $('overlay');
     const msg = $('msg');
+    const pct = $('pct');
     const spin = $('spin');
     const pill = $('pill');
+    const bufChip = $('buf');
     const bar = $('progress');
     const form = $('form');
     const src = $('src');
@@ -104,24 +110,25 @@
     }
 
     function setPill(kind, text) {
-      pill.className = 'pill ' + kind;
+      pill.className = 'chip pill ' + kind;
       pill.textContent = text;
     }
 
-    function showOverlay(text, isError = false) {
+    function showOverlay(text, isError = false, percent = null) {
       overlay.classList.remove('hide');
       msg.textContent = text;
       msg.className = 'msg' + (isError ? ' err' : '');
       spin.style.display = isError ? 'none' : 'block';
+      pct.textContent = percent === null || isError ? '' : percent + '%';
     }
 
     function hideOverlay() { overlay.classList.add('hide'); }
 
     function ago(iso) {
       const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-      if (s < 60) return `${Math.floor(s)}s ago`;
-      if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-      return `${Math.floor(s / 3600)}h ago`;
+      if (s < 60) return `${Math.floor(s)}s`;
+      if (s < 3600) return `${Math.floor(s / 60)}m`;
+      return `${Math.floor(s / 3600)}h`;
     }
 
     function explain(text) {
@@ -180,7 +187,34 @@
       return null;
     }
 
-    // ---------- fit: Fit / Crop / Stretch ----------
+    // ---------- buffer percent: how far ahead the video is loaded ----------
+    function bufferPercent() {
+      const t = video.currentTime;
+      const b = video.buffered;
+      for (let i = 0; i < b.length; i++) {
+        if (t >= b.start(i) && t <= b.end(i)) {
+          const ahead = b.end(i) - t;
+          return Math.min(100, Math.round((ahead / C.buffer_target_s) * 100));
+        }
+      }
+      return 0;
+    }
+
+    function updateBufferChip() {
+      if (!rawUrl || video.readyState < 2) {
+        bufChip.classList.add('hide');
+        return;
+      }
+      bufChip.classList.remove('hide');
+      bufChip.textContent = `${M.buffer} ${bufferPercent()}%`;
+    }
+
+    // Seek bar fill, so the played part glows.
+    function paintSeek(ratio) {
+      seek.style.setProperty('--fill', Math.round(ratio * 100) + '%');
+    }
+
+    // ---------- fit ----------
     function applyFit() {
       const mode = FIT_MODES[fitIdx];
       video.style.objectFit = mode;
@@ -194,8 +228,6 @@
     });
 
     // ---------- fullscreen + landscape ----------
-    // Android Chrome: fullscreen, then lock to landscape.
-    // iPhone: native video fullscreen (the system rotates it).
     async function enterFullscreen() {
       try {
         if (stage.requestFullscreen) {
@@ -207,7 +239,6 @@
           video.webkitEnterFullscreen();
         }
       } catch (_) {
-        // Lock not allowed on this device. Fullscreen still works, so ask the user to turn the phone.
         toastMsg(M.rotate_hint, 2600);
       }
     }
@@ -233,7 +264,7 @@
       }
     });
 
-    // ---------- controls: show on tap, hide while playing ----------
+    // ---------- controls ----------
     function showControls() {
       stage.classList.add('show-ctrl');
       clearTimeout(hideTimer);
@@ -262,7 +293,11 @@
       if (d === Infinity) { setLive(true); return; }
       if (!isFinite(d) || isLive) return;
       timeEl.textContent = `${fmt(video.currentTime)} / ${fmt(d)}`;
-      if (!seeking) seek.value = String(Math.round((video.currentTime / d) * 1000));
+      const ratio = video.currentTime / d;
+      if (!seeking) {
+        seek.value = String(Math.round(ratio * 1000));
+        paintSeek(ratio);
+      }
     }
 
     function fillQuality(inst) {
@@ -287,7 +322,7 @@
     }
 
     qualitySel.addEventListener('change', () => {
-      if (hls) hls.currentLevel = Number(qualitySel.value); // -1 = Auto.
+      if (hls) hls.currentLevel = Number(qualitySel.value);
     });
 
     playBtn.addEventListener('click', () => {
@@ -304,10 +339,14 @@
 
     video.addEventListener('play', () => { playBtn.textContent = '❚❚'; showControls(); });
     video.addEventListener('pause', () => { playBtn.textContent = '▶'; showControls(); });
-    video.addEventListener('timeupdate', updateTime);
+    video.addEventListener('timeupdate', () => { updateTime(); updateBufferChip(); });
     video.addEventListener('durationchange', updateTime);
+    video.addEventListener('progress', updateBufferChip);
 
-    seek.addEventListener('input', () => { seeking = true; });
+    seek.addEventListener('input', () => {
+      seeking = true;
+      paintSeek(Number(seek.value) / 1000);
+    });
     seek.addEventListener('change', () => {
       const d = video.duration;
       if (isFinite(d)) video.currentTime = (Number(seek.value) / 1000) * d;
@@ -337,7 +376,7 @@
           rawUrl = null;
           netRetries = 0;
           showOverlay(M.reconnecting);
-          fetch(API + '/api/refresh', { method: 'POST' }).catch(() => {}); // ask server for a fresh link
+          fetch(API + '/api/refresh', { method: 'POST' }).catch(() => {});
           return;
         }
         hls.startLoad();
@@ -359,6 +398,7 @@
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         fillQuality(hls);
+        hideOverlay();
         video.play().catch(() => {});
       });
       hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => setLive(!!data.details.live));
@@ -407,7 +447,7 @@
         const data = await res.json();
 
         if (data.updated_at) {
-          age.textContent = 'updated ' + ago(data.updated_at);
+          age.textContent = `${M.updated} ${ago(data.updated_at)} ago`;
           age.classList.remove('hide');
         }
         if (data.url && data.url !== rawUrl) playStream(data.url, data.proxy_url);
@@ -423,10 +463,11 @@
         if (rawUrl) return;
 
         const label = C.stage_labels[name];
+        const progress = C.stage_progress[name] || 0;
         if (label) {
           setPill('warn', M.pill.capturing);
-          bar.style.width = (C.stage_progress[name] || 0) + '%';
-          showOverlay(label);
+          bar.style.width = progress + '%';
+          showOverlay(label + '…', false, progress);
         } else if (name === 'timeout_no_stream') {
           setPill('err', M.pill.no_stream);
           bar.style.width = '0%';
@@ -470,7 +511,7 @@
         src.value = '';
         bar.style.width = '5%';
         setPill('warn', isStream ? M.pill.loading : M.pill.capturing);
-        showOverlay(isStream ? M.pill.loading + '…' : M.capture_started + '…');
+        showOverlay(isStream ? M.loading + '…' : M.capture_started + '…', false, 5);
         toastMsg(isStream ? M.stream_set : M.capture_started);
         checkStream();
       } catch (err) {
@@ -520,6 +561,7 @@
         checkStatus();
       }
     }, C.poll_ms);
+    setInterval(updateBufferChip, 1000);
   }
 
   loadConfig().then(start);
