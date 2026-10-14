@@ -1,5 +1,13 @@
 """
-Stream Capture server (Enhanced for CORS, Tokens & DRM/HLS Proxy).
+Stream Capture server.
+  - POST /api/target  : a page URL (auto-capture) or a direct .m3u8 URL (manual play).
+  - POST /api/refresh : a viewer's link died, reload the capture page.
+  - GET  /api/stream  : current stream (raw url + proxy_url).
+  - GET  /api/status  : state, capture stage, last error.
+  - GET  /proxy       : same-origin proxy. Adds Referer/Origin and CORS headers,
+                        rewrites HLS playlists so segments also go through here.
+  - GET  /            : player page.
+  - GET  /player.js, /player.css, /player-config.json : player files.
 """
 
 import ipaddress
@@ -23,8 +31,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CFG = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
 
 M3U8_RE = re.compile(r"\.m3u8(?:$|[?#])", re.IGNORECASE)
-CONTROL_OR_SPACE_RE = re.compile(r"[\s\x00-\x1f\x7f]+")
 
+# Only these files are served from the root path. Everything else is 404.
 PLAYER_FILES = {"player.js", "player-config.json", "player.css"}
 
 USER_AGENT = (
@@ -49,11 +57,8 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def clean_url(value):
-    return CONTROL_OR_SPACE_RE.sub("", value or "")
-
-
 def is_public_host(hostname):
+    """Blocks private, loopback and link-local addresses (SSRF protection)."""
     try:
         infos = socket.getaddrinfo(hostname, None)
     except socket.gaierror:
@@ -86,7 +91,8 @@ def is_m3u8(value):
     return bool(M3U8_RE.search(value or ""))
 
 
-_initial_page = clean_url(CFG.get("page_url", ""))
+# Initial state. If config.json holds a direct .m3u8 link, play it straight away.
+_initial_page = CFG.get("page_url", "")
 if is_m3u8(_initial_page):
     STATE = {"page_url": "", "manual_url": _initial_page, "url": _initial_page,
              "updated_at": now_iso(), "last_error": None, "cycles": 0}
@@ -96,6 +102,7 @@ else:
 
 
 def origin_for(target):
+    """Referer origin: the page being captured, or the stream's own host in manual mode."""
     with LOCK:
         page_url = STATE["page_url"] or ""
     parsed = urlparse(page_url)
@@ -115,11 +122,10 @@ def read_playlist(resp):
 
 
 def rewrite_playlist(text, base_url):
-    """Routes every URI in the playlist (segments, sub-playlists, decryption keys) back through /proxy."""
+    """Routes every URI in the playlist (segments, sub-playlists, keys) back through /proxy."""
 
     def wrap(uri):
-        absolute_url = urljoin(base_url, uri)
-        return "/proxy?url=" + quote(absolute_url, safe="")
+        return "/proxy?url=" + quote(urljoin(base_url, uri), safe="")
 
     lines = []
     for line in text.splitlines():
@@ -127,7 +133,6 @@ def rewrite_playlist(text, base_url):
         if not stripped:
             lines.append(line)
         elif stripped.startswith("#"):
-            # Handles #EXT-X-KEY, #EXT-X-MAP, #EXT-X-STREAM-INF URIs correctly
             lines.append(re.sub(r'URI="([^"]+)"', lambda m: f'URI="{wrap(m.group(1))}"', line))
         else:
             lines.append(wrap(stripped))
@@ -137,9 +142,7 @@ def rewrite_playlist(text, base_url):
 def cors_headers():
     return {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Range, Content-Type, Authorization, X-Requested-With",
-        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, X-Content-Duration",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
         "Cache-Control": "no-cache",
     }
 
@@ -162,6 +165,7 @@ def capture_loop():
         try:
             url = capture_once({**CFG, "page_url": page_url})
             with LOCK:
+                # Discard the result if the user changed the target during this cycle.
                 if STATE["page_url"] != page_url or STATE["manual_url"]:
                     pass
                 elif url:
@@ -183,7 +187,7 @@ def capture_loop():
 @app.post("/api/target")
 def api_target():
     body = request.get_json(silent=True) or {}
-    value = clean_url(str(body.get("page_url") or body.get("stream_url") or ""))
+    value = str(body.get("page_url") or body.get("stream_url") or "").strip()
     if not value:
         return jsonify({"error": "Paste a page URL or a .m3u8 link"}), 400
 
@@ -210,6 +214,7 @@ def api_target():
 
 @app.post("/api/refresh")
 def api_refresh():
+    """A viewer's link died. Reload the capture page so a fresh link is found."""
     request_reload()
     WAKE.set()
     log("Refresh requested by viewer.")
@@ -240,15 +245,10 @@ def api_status():
     return jsonify(data)
 
 
-@app.route("/proxy", methods=["GET", "OPTIONS"])
+@app.get("/proxy")
 def proxy():
-    # Handle preflight options request for CORS
-    if request.method == "OPTIONS":
-        return Response(status=204, headers=cors_headers())
-
-    target = clean_url(request.args.get("url", ""))
+    target = request.args.get("url", "").strip()
     if not is_allowed_target(target):
-        log(f"proxy rejected url: {target[:120]!r}")
         return jsonify({"error": "Invalid or disallowed URL"}), 400
 
     origin = origin_for(target)
@@ -259,8 +259,6 @@ def proxy():
         "Referer": origin + "/",
         "Origin": origin,
     }
-    
-    # Forward client Range header for video chunk streaming if present
     if request.headers.get("Range"):
         headers["Range"] = request.headers["Range"]
 
@@ -268,13 +266,7 @@ def proxy():
         upstream = requests.get(target, headers=headers, stream=True,
                                 timeout=(10, 30), allow_redirects=True)
     except requests.RequestException as exc:
-        log(f"proxy upstream error for {urlparse(target).hostname}: {type(exc).__name__}")
         return jsonify({"error": f"Upstream failed: {exc}"}), 502
-
-    if upstream.status_code >= 400:
-        log(f"proxy upstream {upstream.status_code} for {urlparse(target).hostname}")
-        upstream.close()
-        return jsonify({"error": f"Upstream responded {upstream.status_code}"}), 502
 
     ctype = upstream.headers.get("Content-Type", "")
     is_playlist = ("mpegurl" in ctype.lower()
@@ -289,7 +281,6 @@ def proxy():
         upstream.close()
 
         if not body.lstrip().startswith("#EXTM3U"):
-            log(f"proxy not a playlist from {urlparse(target).hostname}: {body[:80]!r}")
             return jsonify({"error": "Upstream did not return an HLS playlist"}), 502
 
         return Response(
@@ -299,6 +290,7 @@ def proxy():
             headers=cors_headers(),
         )
 
+    # Segments and other binary data are streamed through without buffering.
     def generate():
         try:
             for chunk in upstream.iter_content(CHUNK_BYTES):
@@ -308,7 +300,7 @@ def proxy():
             upstream.close()
 
     out_headers = cors_headers()
-    for name in ("Content-Range", "Accept-Ranges", "Content-Length", "Last-Modified", "ETag", "Content-Type"):
+    for name in ("Content-Range", "Accept-Ranges", "Content-Length", "Last-Modified", "ETag"):
         if name in upstream.headers:
             out_headers[name] = upstream.headers[name]
 
@@ -322,6 +314,7 @@ def proxy():
 
 @app.get("/<name>")
 def player_asset(name):
+    """Serves only the player files listed in PLAYER_FILES. Anything else is 404."""
     if name not in PLAYER_FILES:
         return jsonify({"error": "not found"}), 404
     return send_from_directory(BASE_DIR / "static", name)
