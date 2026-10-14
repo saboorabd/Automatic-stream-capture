@@ -5,6 +5,16 @@
   const SELF = document.currentScript ? document.currentScript.src : location.href;
   const CONFIG_URL = new URL('player-config.json', SELF).href;
 
+  // Icon paths (24x24 viewBox).
+  const ICON = {
+    play: '<path d="M8 5v14l11-7z" fill="currentColor"/>',
+    pause: '<path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/>',
+    vol: '<path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/>'
+       + '<path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    mute: '<path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/>'
+        + '<path d="M16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  };
+
   // Used only if player-config.json cannot be loaded.
   const FALLBACK = {
     api_base_on_pages: 'https://automatic-stream-capture.onrender.com',
@@ -60,6 +70,7 @@
     const LAST_KEY = 'stream:last';
     const BAD_KEY = 'stream:badhosts';
     const FIT_KEY = 'stream:fit';
+    const VOL_KEY = 'stream:volume';
     const LAST_MAX_AGE_MS = C.last_stream_max_age_hours * 3600 * 1000;
     const FIT_MODES = ['contain', 'cover', 'fill'];
 
@@ -79,12 +90,16 @@
     const copyBtn = $('copy');
     const age = $('age');
     const toast = $('toast');
+    const big = $('big');
     const playBtn = $('play');
+    const playIcon = $('playIcon');
     const seek = $('seek');
     const liveEl = $('live');
     const goLiveBtn = $('golive');
     const timeEl = $('time');
     const muteBtn = $('mute');
+    const volIcon = $('volIcon');
+    const vol = $('vol');
     const qualitySel = $('quality');
     const fitBtn = $('fit');
     const fsBtn = $('fs');
@@ -102,6 +117,14 @@
     let fitIdx = 0;
 
     // ---------- helpers ----------
+    function setIcon(svgEl, paths) {
+      if (svgEl) svgEl.innerHTML = paths;
+    }
+
+    function paintRange(input, ratio) {
+      input.style.setProperty('--fill', Math.round(ratio * 100) + '%');
+    }
+
     function toastMsg(text, ms = 1600) {
       toast.textContent = text;
       toast.classList.add('show');
@@ -120,9 +143,13 @@
       msg.className = 'msg' + (isError ? ' err' : '');
       spin.style.display = isError ? 'none' : 'block';
       pct.textContent = percent === null || isError ? '' : percent + '%';
+      updateUI();
     }
 
-    function hideOverlay() { overlay.classList.add('hide'); }
+    function hideOverlay() {
+      overlay.classList.add('hide');
+      updateUI();
+    }
 
     function ago(iso) {
       const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
@@ -187,6 +214,34 @@
       return null;
     }
 
+    // ---------- one place that keeps every control in sync ----------
+    function updateUI() {
+      const playing = !video.paused && !video.ended;
+      setIcon(playIcon, playing ? ICON.pause : ICON.play);
+      stage.classList.toggle('playing', playing);
+      // Big centre button shows only when paused and no loading overlay covers the picture.
+      const overlayShown = !overlay.classList.contains('hide');
+      stage.classList.toggle('paused', !playing && !overlayShown && !!rawUrl);
+      updateVolume();
+    }
+
+    function updateVolume() {
+      const off = video.muted || video.volume === 0;
+      setIcon(volIcon, off ? ICON.mute : ICON.vol);
+      const level = video.muted ? 0 : video.volume;
+      vol.value = String(Math.round(level * 100));
+      paintRange(vol, level);
+    }
+
+    function updateBufferChip() {
+      if (!rawUrl || video.readyState < 2) {
+        bufChip.classList.add('hide');
+        return;
+      }
+      bufChip.classList.remove('hide');
+      bufChip.textContent = `${M.buffer} ${bufferPercent()}%`;
+    }
+
     // ---------- buffer percent: how far ahead the video is loaded ----------
     function bufferPercent() {
       const t = video.currentTime;
@@ -200,18 +255,47 @@
       return 0;
     }
 
-    function updateBufferChip() {
-      if (!rawUrl || video.readyState < 2) {
-        bufChip.classList.add('hide');
-        return;
-      }
-      bufChip.classList.remove('hide');
-      bufChip.textContent = `${M.buffer} ${bufferPercent()}%`;
+    // ---------- play / pause ----------
+    function togglePlay() {
+      if (video.paused) video.play().catch(() => {});
+      else video.pause();
     }
 
-    // Seek bar fill, so the played part glows.
-    function paintSeek(ratio) {
-      seek.style.setProperty('--fill', Math.round(ratio * 100) + '%');
+    big.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePlay();
+    });
+
+    playBtn.addEventListener('click', togglePlay);
+
+    video.addEventListener('play', () => { updateUI(); showControls(); });
+    video.addEventListener('playing', updateUI);
+    video.addEventListener('pause', () => { updateUI(); showControls(); });
+    video.addEventListener('ended', updateUI);
+
+    // ---------- volume + mute ----------
+    muteBtn.addEventListener('click', () => {
+      video.muted = !video.muted;
+      if (!video.muted && video.volume === 0) video.volume = 0.5;
+      writeJSON(VOL_KEY, { volume: video.volume, muted: video.muted });
+      updateVolume();
+    });
+
+    vol.addEventListener('input', () => {
+      video.volume = Number(vol.value) / 100;
+      video.muted = video.volume === 0;
+      writeJSON(VOL_KEY, { volume: video.volume, muted: video.muted });
+      updateVolume();
+    });
+
+    video.addEventListener('volumechange', updateVolume);
+
+    function restoreVolume() {
+      const saved = readJSON(VOL_KEY, null);
+      if (saved && typeof saved.volume === 'number') video.volume = saved.volume;
+      // Browsers only allow sound after a tap, so the video starts muted and the user taps to unmute.
+      video.muted = true;
+      updateVolume();
     }
 
     // ---------- fit ----------
@@ -264,7 +348,7 @@
       }
     });
 
-    // ---------- controls ----------
+    // ---------- controls: show on tap, hide while playing ----------
     function showControls() {
       stage.classList.add('show-ctrl');
       clearTimeout(hideTimer);
@@ -273,9 +357,9 @@
       }
     }
 
-    // Tapping the picture only toggles the controls. It never pauses playback.
+    // Tapping the picture only shows or hides the controls. It never pauses playback.
     stage.addEventListener('click', (e) => {
-      if (e.target.closest('.ctrl')) return;
+      if (e.target.closest('.ctrl, .big')) return;
       if (stage.classList.contains('show-ctrl')) stage.classList.remove('show-ctrl');
       else showControls();
     });
@@ -296,7 +380,7 @@
       const ratio = video.currentTime / d;
       if (!seeking) {
         seek.value = String(Math.round(ratio * 1000));
-        paintSeek(ratio);
+        paintRange(seek, ratio);
       }
     }
 
@@ -325,11 +409,6 @@
       if (hls) hls.currentLevel = Number(qualitySel.value);
     });
 
-    playBtn.addEventListener('click', () => {
-      if (video.paused) video.play().catch(() => {});
-      else video.pause();
-    });
-
     goLiveBtn.addEventListener('click', () => {
       if (hls && hls.liveSyncPosition) video.currentTime = hls.liveSyncPosition;
       else if (isFinite(video.duration)) video.currentTime = video.duration;
@@ -337,25 +416,18 @@
       toastMsg(M.live_toast);
     });
 
-    video.addEventListener('play', () => { playBtn.textContent = '❚❚'; showControls(); });
-    video.addEventListener('pause', () => { playBtn.textContent = '▶'; showControls(); });
     video.addEventListener('timeupdate', () => { updateTime(); updateBufferChip(); });
     video.addEventListener('durationchange', updateTime);
     video.addEventListener('progress', updateBufferChip);
 
     seek.addEventListener('input', () => {
       seeking = true;
-      paintSeek(Number(seek.value) / 1000);
+      paintRange(seek, Number(seek.value) / 1000);
     });
     seek.addEventListener('change', () => {
       const d = video.duration;
       if (isFinite(d)) video.currentTime = (Number(seek.value) / 1000) * d;
       seeking = false;
-    });
-
-    muteBtn.addEventListener('click', () => {
-      video.muted = !video.muted;
-      muteBtn.textContent = video.muted ? '🔇' : '🔊';
     });
 
     // ---------- playback ----------
@@ -543,6 +615,8 @@
     // ---------- start ----------
     fitIdx = Math.max(0, FIT_MODES.indexOf(readJSON(FIT_KEY, 'contain')));
     applyFit();
+    restoreVolume();
+    updateUI();
 
     // 1. Last known stream plays from cache immediately, before the server answers.
     const last = loadLast();
