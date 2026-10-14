@@ -1,6 +1,8 @@
 #!/bin/sh
-# Starts a virtual screen (Xvfb) for headful Chromium, waits until it is ready, then runs the app.
-set -e
+# Starts a virtual screen (Xvfb) for Chromium, waits until it is ready,
+# then runs the app. If the app crashes, it restarts after 2 seconds.
+
+echo "Starting Stream Capture..."
 
 if [ ! -S /tmp/.X11-unix/X99 ]; then
   Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
@@ -11,6 +13,16 @@ if [ ! -S /tmp/.X11-unix/X99 ]; then
   done
 fi
 
+if [ ! -S /tmp/.X11-unix/X99 ]; then
+  echo "Xvfb did not start. See /tmp/xvfb.log"
+  cat /tmp/xvfb.log
+fi
+
 export DISPLAY=:99
-echo "[start] DISPLAY=$DISPLAY, starting app"
-exec python app.py
+echo "DISPLAY=$DISPLAY"
+
+while true; do
+  python app.py
+  echo "Server stopped. Restarting in 2 seconds..."
+  sleep 2
+done
