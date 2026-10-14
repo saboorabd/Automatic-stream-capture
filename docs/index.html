@@ -24,6 +24,10 @@
     <div id="stage" class="stage">
       <video id="v" playsinline muted autoplay></video>
 
+      <button id="big" class="big" type="button" aria-label="Play">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+      </button>
+
       <div id="overlay" class="overlay">
         <div id="spin" class="spinner"></div>
         <div id="pct" class="pct"></div>
@@ -31,19 +35,32 @@
       </div>
 
       <div class="ctrl">
-        <div class="row">
-          <input id="seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+        <div class="seekrow">
+          <input id="seek" class="range" type="range" min="0" max="1000" value="0" aria-label="Seek">
         </div>
-        <div class="row">
-          <button id="play" type="button" aria-label="Play or pause">▶</button>
+        <div class="bottom">
+          <button id="play" class="btn round" type="button" aria-label="Play or pause">
+            <svg id="playIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          </button>
+
+          <div class="vol">
+            <button id="mute" class="btn" type="button" aria-label="Sound on or off">
+              <svg id="volIcon" viewBox="0 0 24 24" aria-hidden="true"></svg>
+            </button>
+            <input id="vol" class="range vol-range" type="range" min="0" max="100" value="100" aria-label="Volume">
+          </div>
+
           <span id="live" class="live hide">LIVE</span>
-          <button id="golive" class="golive hide" type="button">Go live</button>
+          <button id="golive" class="pillbtn golive hide" type="button">Go live</button>
           <span id="time" class="time">0:00 / 0:00</span>
+
           <span class="spacer"></span>
-          <button id="mute" type="button" aria-label="Sound">🔇</button>
-          <select id="quality" aria-label="Quality"><option value="-1">Auto</option></select>
-          <button id="fit" type="button" aria-label="Fit, crop or stretch">Fit</button>
-          <button id="fs" type="button" aria-label="Fullscreen">⛶</button>
+
+          <select id="quality" class="sel" aria-label="Quality"><option value="-1">Auto</option></select>
+          <button id="fit" class="pillbtn" type="button" aria-label="Fit, crop or stretch">Fit</button>
+          <button id="fs" class="btn" type="button" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
         </div>
       </div>
     </div>
@@ -65,4 +82,3 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script src="player.js"></script>
 </body>
-</html>
